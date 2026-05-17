@@ -1,0 +1,40 @@
+# Python cache / environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Local sensitive sleep exports
+*.jsonl
+*.ndjson
+
+# Generated outputs
+out/
+*.csv
+*.zip
+
+# Model artifacts
+*.pkl
+*.pickle
+*.joblib
+*.onnx
+*.tflite
+
+# Reports generated from personal data
+data_quality_report.md
+model_eval_summary.json
+predictions.csv
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Allow tiny anonymized fixtures when needed.
+!tests/fixtures/
+!tests/fixtures/*.jsonl
+!tests/fixtures/*.csv
