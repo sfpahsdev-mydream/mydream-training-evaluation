@@ -12,6 +12,7 @@ env/
 
 # Generated outputs
 out/
+colab_result/
 *.csv
 *.zip
 

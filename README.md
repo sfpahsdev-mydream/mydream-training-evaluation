@@ -27,6 +27,11 @@ If tests need sample data, use only tiny anonymized fixtures under
 
 - `parse_sleep_export.py`: converts Android JSONL exports into CSV tables
 - `train_lightgbm_colab.py`: Colab/server LightGBM training/evaluation script
+- `analyze_alarm_failures.py`: compares threshold-level smart-alarm failure cases
+- `build_sequence_dataset.py`: builds Phase 2 sleep-pattern sequence datasets
+- `analyze_sequence_dataset.py`: inspects Phase 2 sequence dataset quality
+- `train_sequence_model.py`: trains the first lightweight local sequence baseline
+- `train_sequence_colab.py`: trains the Colab/server GRU or 1D CNN sequence model
 - `mydream_lightgbm_colab.ipynb`: thin Colab runner for the training script
 - `README.md`: local and Colab workflow notes
 
@@ -48,8 +53,8 @@ Or pass paths explicitly:
 
 ```powershell
 python parse_sleep_export.py `
-  --input C:\path\to\mydream_sleep_2026-05-17.jsonl `
-  --out-dir out\mydream_sleep_2026-05-17
+  --input C:\path\to\mydream_sleep_2026-05-18.jsonl `
+  --out-dir out\verify_week_period_profile
 ```
 
 Outputs:
@@ -64,7 +69,7 @@ Outputs:
 Canonical output directory for the current export:
 
 ```text
-out\mydream_sleep_2026-05-17\
+out\verify_week_period_profile\
 ```
 
 ## Default Assumptions
@@ -128,12 +133,12 @@ Optional:
 
 - `sessions.csv`
 - `stages.csv`
-- original `mydream_sleep_2026-05-17.jsonl`
+- original `mydream_sleep_2026-05-18.jsonl`
 
 For convenience, the local workflow can package the Colab inputs into:
 
 ```text
-out\mydream_sleep_2026-05-17\mydream_colab_lightgbm_inputs.zip
+out\verify_week_period_profile\mydream_colab_lightgbm_inputs.zip
 ```
 
 ## Leakage-Safe First Feature Set
@@ -184,16 +189,16 @@ Run with a normal output directory:
 
 ```bash
 python train_lightgbm_colab.py \
-  --input-dir out/mydream_sleep_2026-05-17 \
-  --output-dir out/mydream_sleep_2026-05-17/model_eval
+  --input-dir out/verify_week_period_profile \
+  --output-dir out/verify_week_period_profile/model_eval
 ```
 
 Run the leakage comparison separately if needed:
 
 ```bash
 python train_lightgbm_colab.py \
-  --input-dir out/mydream_sleep_2026-05-17 \
-  --output-dir out/mydream_sleep_2026-05-17/model_eval_with_next_stage \
+  --input-dir out/verify_week_period_profile \
+  --output-dir out/verify_week_period_profile/model_eval_with_next_stage \
   --include-next-stage
 ```
 
@@ -217,6 +222,134 @@ Expected outputs:
 - `model_eval/session_top_candidates.csv`
 - `model_eval/session_recommendation_summary.csv`
 - `model_eval/alarm_backtest_summary.csv`
+
+## Alarm Failure Analysis
+
+After a model run, analyze threshold-level smart-alarm failures:
+
+```bash
+python analyze_alarm_failures.py \
+  --model-dir out/verify_week_period_profile/model_eval
+```
+
+Compare two model runs by passing `--model-dir` twice:
+
+```bash
+python analyze_alarm_failures.py \
+  --model-dir out/verify_week_period_profile/model_eval \
+  --model-dir out/verify_week_period_profile/model_eval_second
+```
+
+Outputs are written to `failure_analysis/` by default:
+
+- `threshold_comparison.csv`
+- `model_comparison_summary.csv`
+- `*_alarm_failure_cases_t0_4.csv`
+- `*_alarm_failure_cases_t0_6.csv`
+- `*_alarm_failure_cases_all_thresholds.csv`
+
+## Phase 2 Sequence Dataset
+
+Build the first 60-minute sleep-pattern sequence dataset:
+
+```bash
+python build_sequence_dataset.py \
+  --input-dir out/verify_week_period_profile
+```
+
+Default output:
+
+- `out/verify_week_period_profile/sequence_60m/sequence_stage_ids.npy`
+- `out/verify_week_period_profile/sequence_60m/sequence_metadata.csv`
+- `out/verify_week_period_profile/sequence_60m/sequence_summary.json`
+- `out/verify_week_period_profile/sequence_60m/stage_vocab.json`
+
+Inspect dataset quality:
+
+```bash
+python analyze_sequence_dataset.py \
+  --sequence-dir out/verify_week_period_profile/sequence_60m
+```
+
+Quality outputs are written to `sequence_60m/quality/`:
+
+- `sequence_quality_report.json`
+- `sequence_split_summary.csv`
+- `sequence_candidate_stage_label_summary.csv`
+- `sequence_known_ratio_buckets.csv`
+- `sequence_position_stage_ratios.csv`
+- `sequence_transition_counts.csv`
+
+Train the first local sequence baseline:
+
+```bash
+python train_sequence_model.py \
+  --sequence-dir out/verify_week_period_profile/sequence_60m \
+  --predict-sequence-dir out/verify_week_period_profile/sequence_60m_alarm \
+  --output-dir out/verify_week_period_profile/sequence_60m/model_sequence_baseline
+```
+
+The local baseline uses flattened one-hot stage sequences plus metadata with
+scikit-learn logistic regression. Use it as a sanity check before Colab/server
+GRU or 1D CNN training, not as the final sequence model.
+
+Compare the local sequence baseline against the Phase 1 tabular model:
+
+```bash
+python analyze_alarm_failures.py \
+  --model-dir out/verify_week_period_profile/model_eval \
+  --model-dir out/verify_week_period_profile/sequence_60m/model_sequence_baseline \
+  --output-dir out/verify_week_period_profile/model_compare_tabular_vs_sequence
+```
+
+Train the real Phase 2 sequence model in Colab or a server environment:
+
+```bash
+python train_sequence_colab.py \
+  --sequence-dir out/verify_week_period_profile/sequence_60m \
+  --predict-sequence-dir out/verify_week_period_profile/sequence_60m_alarm \
+  --output-dir out/verify_week_period_profile/sequence_60m/model_sequence_gru \
+  --model-type gru
+```
+
+Run the 1D CNN comparison:
+
+```bash
+python train_sequence_colab.py \
+  --sequence-dir out/verify_week_period_profile/sequence_60m \
+  --predict-sequence-dir out/verify_week_period_profile/sequence_60m_alarm \
+  --output-dir out/verify_week_period_profile/sequence_60m/model_sequence_cnn \
+  --model-type cnn
+```
+
+Then compare against the tabular baseline:
+
+```bash
+python analyze_alarm_failures.py \
+  --model-dir out/verify_week_period_profile/model_eval \
+  --model-dir out/verify_week_period_profile/sequence_60m/model_sequence_gru \
+  --model-dir out/verify_week_period_profile/sequence_60m/model_sequence_cnn \
+  --output-dir out/verify_week_period_profile/model_compare_tabular_gru_cnn
+```
+
+Current Colab/server result summary:
+
+```text
+GRU test ROC-AUC: 0.903246
+GRU test PR-AUC: 0.597314
+GRU precision/recall at 0.5: 0.450520 / 0.814475
+
+CNN test ROC-AUC: 0.896746
+CNN test PR-AUC: 0.565252
+CNN precision/recall at 0.5: 0.449347 / 0.800171
+```
+
+Current alarm-window interpretation:
+
+- GRU is the best sequence result so far.
+- GRU improves deep-success count versus tabular at both `0.4` and `0.6`.
+- GRU also increases strong-fail count, so the next step is combined scoring rather than direct Android deployment.
+- CNN is weaker than GRU for this dataset.
 
 ## Evaluation Rules
 
