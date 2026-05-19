@@ -54,6 +54,13 @@ METADATA_COLUMNS = [
     "recent_30m_deep_minutes",
     "recent_30m_rem_minutes",
     "recent_30m_unknown_minutes",
+    "sequence_awake_ratio",
+    "sequence_light_ratio",
+    "sequence_deep_ratio",
+    "sequence_rem_ratio",
+    "sequence_unknown_ratio",
+    "sequence_stage_transition_count",
+    "sequence_known_stage_transition_count",
     "sequence_known_timestep_count",
     "sequence_unknown_timestep_count",
     "sequence_known_ratio",
@@ -185,6 +192,18 @@ def sequence_summary(candidates: pd.DataFrame, sequences: np.ndarray, window_min
     }
 
 
+def add_sequence_context_features(candidates: pd.DataFrame, sequences: np.ndarray) -> None:
+    total_timesteps = sequences.shape[1]
+    for stage_id, stage_name in ID_TO_STAGE.items():
+        column = f"sequence_{stage_name.lower()}_ratio"
+        candidates[column] = (sequences == stage_id).sum(axis=1) / total_timesteps
+
+    transitions = sequences[:, 1:] != sequences[:, :-1]
+    known_pairs = (sequences[:, 1:] != STAGE_TO_ID["Unknown"]) & (sequences[:, :-1] != STAGE_TO_ID["Unknown"])
+    candidates["sequence_stage_transition_count"] = transitions.sum(axis=1).astype(int)
+    candidates["sequence_known_stage_transition_count"] = (transitions & known_pairs).sum(axis=1).astype(int)
+
+
 def main() -> None:
     args = parse_args()
     input_dir = args.input_dir
@@ -225,6 +244,7 @@ def main() -> None:
     candidates["sequence_unknown_timestep_count"] = unknown_counts.astype(int)
     candidates["sequence_known_timestep_count"] = args.window_minutes - candidates["sequence_unknown_timestep_count"]
     candidates["sequence_known_ratio"] = candidates["sequence_known_timestep_count"] / args.window_minutes
+    add_sequence_context_features(candidates, sequences)
 
     metadata_columns = [column for column in METADATA_COLUMNS if column in candidates.columns]
     metadata = candidates.loc[:, metadata_columns].copy()

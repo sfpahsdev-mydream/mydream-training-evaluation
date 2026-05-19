@@ -62,6 +62,13 @@ NUMERIC_CONTEXT_COLUMNS = [
     "recent_30m_deep_minutes",
     "recent_30m_rem_minutes",
     "recent_30m_unknown_minutes",
+    "sequence_awake_ratio",
+    "sequence_light_ratio",
+    "sequence_deep_ratio",
+    "sequence_rem_ratio",
+    "sequence_unknown_ratio",
+    "sequence_stage_transition_count",
+    "sequence_known_stage_transition_count",
     "sequence_known_ratio",
 ]
 
@@ -71,11 +78,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sequence-dir", type=Path, required=True)
     parser.add_argument("--predict-sequence-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--model-type", choices=["gru", "cnn"], default="gru")
+    parser.add_argument("--model-type", choices=["gru", "lstm", "cnn", "cnn_gru"], default="gru")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--embedding-dim", type=int, default=8)
     parser.add_argument("--hidden-units", type=int, default=32)
+    parser.add_argument("--dense-units", type=int, default=32)
+    parser.add_argument("--context-units", type=int, default=16)
+    parser.add_argument("--conv-filters", type=int, default=16)
+    parser.add_argument("--conv-kernel-size", type=int, default=5)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
@@ -89,22 +100,35 @@ def load_stage_count(sequence_dir: Path) -> int:
     return max(int(value) for value in stage_to_id.values()) + 1
 
 
-def load_dataset(sequence_dir: Path, stage_count: int | None = None) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+def load_dataset(
+    sequence_dir: Path,
+    stage_count: int | None = None,
+    context_columns: list[str] | None = None,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     metadata = pd.read_csv(sequence_dir / "sequence_metadata.csv")
     stages = np.load(sequence_dir / "sequence_stage_ids.npy").astype(np.int32)
     if len(metadata) != len(stages):
         raise ValueError(f"metadata rows ({len(metadata)}) do not match sequences ({len(stages)})")
     if stage_count is None:
         stage_count = load_stage_count(sequence_dir)
-    context = metadata.loc[:, NUMERIC_CONTEXT_COLUMNS].copy()
-    for column in NUMERIC_CONTEXT_COLUMNS:
-        context[column] = pd.to_numeric(context[column], errors="coerce").fillna(0.0)
+    if context_columns is None:
+        context_columns = [column for column in NUMERIC_CONTEXT_COLUMNS if column in metadata.columns]
+    missing_context_columns = sorted(set(context_columns) - set(metadata.columns))
+    if missing_context_columns:
+        print(f"Missing context columns; filling with zero: {missing_context_columns}")
+    context = pd.DataFrame(index=metadata.index)
+    for column in context_columns:
+        if column in metadata.columns:
+            context[column] = pd.to_numeric(metadata[column], errors="coerce").fillna(0.0)
+        else:
+            context[column] = 0.0
     context_values = context.to_numpy(dtype=np.float32)
     return metadata, stages, context_values
 
 
 def standardize_context(
     train_context: np.ndarray,
+    columns: list[str],
     *others: np.ndarray,
 ) -> tuple[np.ndarray, list[np.ndarray], dict[str, Any]]:
     mean = train_context.mean(axis=0)
@@ -113,7 +137,7 @@ def standardize_context(
     scaled_train = (train_context - mean) / std
     scaled_others = [(context - mean) / std for context in others]
     stats = {
-        "columns": NUMERIC_CONTEXT_COLUMNS,
+        "columns": columns,
         "mean": mean.tolist(),
         "std": std.tolist(),
     }
@@ -127,6 +151,10 @@ def build_model(
     context_dim: int,
     embedding_dim: int,
     hidden_units: int,
+    dense_units: int,
+    context_units: int,
+    conv_filters: int,
+    conv_kernel_size: int,
     dropout: float,
     learning_rate: float,
 ):
@@ -139,13 +167,30 @@ def build_model(
     x = layers.Embedding(input_dim=stage_count, output_dim=embedding_dim, name="stage_embedding")(stage_input)
     if model_type == "gru":
         x = layers.GRU(hidden_units, dropout=dropout, name="stage_gru")(x)
-    else:
-        x = layers.Conv1D(hidden_units, kernel_size=5, padding="same", activation="relu", name="stage_conv")(x)
+    elif model_type == "lstm":
+        x = layers.LSTM(hidden_units, dropout=dropout, name="stage_lstm")(x)
+    elif model_type == "cnn":
+        x = layers.Conv1D(
+            hidden_units,
+            kernel_size=conv_kernel_size,
+            padding="same",
+            activation="relu",
+            name="stage_conv",
+        )(x)
         x = layers.GlobalMaxPooling1D(name="stage_pool")(x)
         x = layers.Dropout(dropout)(x)
-    context_branch = layers.Dense(16, activation="relu", name="context_dense")(context_input)
+    else:
+        x = layers.Conv1D(
+            conv_filters,
+            kernel_size=conv_kernel_size,
+            padding="same",
+            activation="relu",
+            name="stage_conv",
+        )(x)
+        x = layers.GRU(hidden_units, dropout=dropout, name="stage_gru")(x)
+    context_branch = layers.Dense(context_units, activation="relu", name="context_dense")(context_input)
     merged = layers.Concatenate(name="merge")([x, context_branch])
-    merged = layers.Dense(32, activation="relu", name="dense")(merged)
+    merged = layers.Dense(dense_units, activation="relu", name="dense")(merged)
     merged = layers.Dropout(dropout)(merged)
     output = layers.Dense(1, activation="sigmoid", name="p_next_deep_10m")(merged)
     model = keras.Model(inputs=[stage_input, context_input], outputs=output)
@@ -213,6 +258,10 @@ def prediction_rows(metadata: pd.DataFrame, probabilities: np.ndarray, threshold
     return rows.loc[:, [column for column in OUTPUT_COLUMNS if column in rows.columns]]
 
 
+def available_context_columns(metadata: pd.DataFrame) -> list[str]:
+    return [column for column in NUMERIC_CONTEXT_COLUMNS if column in metadata.columns]
+
+
 def main() -> None:
     args = parse_args()
     import tensorflow as tf
@@ -224,11 +273,13 @@ def main() -> None:
 
     stage_count = load_stage_count(sequence_dir)
     metadata, stages, context = load_dataset(sequence_dir, stage_count)
+    context_columns = available_context_columns(metadata)
     train_mask = metadata["split"] == "train"
     validation_mask = metadata["split"] == "validation"
     test_mask = metadata["split"] == "test"
     train_context, scaled, context_stats = standardize_context(
         context[train_mask],
+        context_columns,
         context[validation_mask],
         context[test_mask],
     )
@@ -246,6 +297,10 @@ def main() -> None:
         context_dim=context.shape[1],
         embedding_dim=args.embedding_dim,
         hidden_units=args.hidden_units,
+        dense_units=args.dense_units,
+        context_units=args.context_units,
+        conv_filters=args.conv_filters,
+        conv_kernel_size=args.conv_kernel_size,
         dropout=args.dropout,
         learning_rate=args.learning_rate,
     )
@@ -277,6 +332,17 @@ def main() -> None:
         "target": TARGET,
         "model": f"{args.model_type}_sequence_model",
         "threshold": args.threshold,
+        "architecture": {
+            "model_type": args.model_type,
+            "embedding_dim": args.embedding_dim,
+            "hidden_units": args.hidden_units,
+            "dense_units": args.dense_units,
+            "context_units": args.context_units,
+            "conv_filters": args.conv_filters,
+            "conv_kernel_size": args.conv_kernel_size,
+            "dropout": args.dropout,
+            "learning_rate": args.learning_rate,
+        },
         "class_weight": class_weight,
         "history": {key: [float(value) for value in values] for key, values in history.history.items()},
     }
@@ -303,8 +369,12 @@ def main() -> None:
         threshold_frames.append(thresholds)
 
     if args.predict_sequence_dir:
-        scoring_metadata, scoring_stages, scoring_context = load_dataset(args.predict_sequence_dir, stage_count)
-        _, scaled_scoring_list, _ = standardize_context(context[train_mask], scoring_context)
+        scoring_metadata, scoring_stages, scoring_context = load_dataset(
+            args.predict_sequence_dir,
+            stage_count,
+            context_columns,
+        )
+        _, scaled_scoring_list, _ = standardize_context(context[train_mask], context_columns, scoring_context)
         scoring_context = scaled_scoring_list[0]
         scoring_probabilities = model.predict(
             {"stage_sequence": scoring_stages, "context": scoring_context},
