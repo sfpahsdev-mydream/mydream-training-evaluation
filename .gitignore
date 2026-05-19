@@ -13,6 +13,7 @@ env/
 # Generated outputs
 out/
 colab_result/
+local_backup/
 *.csv
 *.zip
 
