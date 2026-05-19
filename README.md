@@ -27,11 +27,15 @@ If tests need sample data, use only tiny anonymized fixtures under
 
 - `parse_sleep_export.py`: converts Android JSONL exports into CSV tables
 - `train_lightgbm_colab.py`: Colab/server LightGBM training/evaluation script
+- `train_tabular_tflite_colab.py`: trains a small TFLite-friendly tabular model for Android runtime evaluation
 - `analyze_alarm_failures.py`: compares threshold-level smart-alarm failure cases
 - `build_sequence_dataset.py`: builds Phase 2 sleep-pattern sequence datasets
 - `analyze_sequence_dataset.py`: inspects Phase 2 sequence dataset quality
 - `train_sequence_model.py`: trains the first lightweight local sequence baseline
-- `train_sequence_colab.py`: trains the Colab/server GRU or 1D CNN sequence model
+- `train_sequence_colab.py`: trains the Colab/server GRU, 1D CNN, or CNN+GRU sequence model
+- `run_sequence_experiment_matrix.py`: runs GRU and CNN+GRU tuning matrices and alarm-window comparisons
+- `build_combined_alarm_scores.py`: combines tabular, sequence, and deadline-closeness alarm scores for comparison
+- `convert_sequence_model_tflite.py`: converts the selected Keras sequence model to TensorFlow Lite and verifies sample outputs
 - `mydream_lightgbm_colab.ipynb`: thin Colab runner for the training script
 - `README.md`: local and Colab workflow notes
 
@@ -210,6 +214,42 @@ python train_lightgbm_colab.py \
   --output-dir model_eval
 ```
 
+## Tabular TFLite Runtime Candidate
+
+Train a small deployment-oriented tabular model with the same leakage-safe
+Phase 1 feature set:
+
+```bash
+python train_tabular_tflite_colab.py \
+  --input-dir out/verify_week_period_profile \
+  --output-dir out/verify_week_period_profile/model_tabular_tflite \
+  --float16
+```
+
+Expected outputs:
+
+- `model_tabular_tflite/tabular_model.keras`
+- `model_tabular_tflite/tabular_model_float32.tflite`
+- `model_tabular_tflite/tabular_model_float16.tflite`
+- `model_tabular_tflite/tabular_feature_scaler.json`
+- `model_tabular_tflite/tabular_tflite_manifest.json`
+- `model_tabular_tflite/tabular_metrics.json`
+- `model_tabular_tflite/tabular_predictions.csv`
+- `model_tabular_tflite/alarm_predictions_long.csv`
+
+Use `alarm_predictions_long.csv` as a drop-in tabular prediction file for
+combined-score experiments:
+
+```bash
+python build_combined_alarm_scores.py \
+  --tabular-predictions out/verify_week_period_profile/model_tabular_tflite/alarm_predictions_long.csv \
+  --sequence-predictions out/verify_week_period_profile/sequence_experiments/gru/gru64_dense32_dropout00/alarm_predictions_long.csv \
+  --output-dir out/verify_week_period_profile/combined_alarm_scores_tabular_tflite
+```
+
+Do not replace the LightGBM tabular baseline until this model's alarm-window
+behavior is compared against `out/verify_week_period_profile/model_eval/`.
+
 Expected outputs:
 
 - `model_eval/label_deep_soon.joblib`
@@ -248,6 +288,72 @@ Outputs are written to `failure_analysis/` by default:
 - `*_alarm_failure_cases_t0_6.csv`
 - `*_alarm_failure_cases_all_thresholds.csv`
 
+## Data Quality And Fixed-Wake Coverage
+
+Before model tuning, run the data-quality audit:
+
+```bash
+python audit_sleep_data_quality.py
+```
+
+Primary outputs:
+
+```text
+out/verify_week_period_profile/data_quality/data_quality_summary.json
+out/verify_week_period_profile/data_quality/alarm_window_quality_by_session.csv
+out/verify_week_period_profile/data_quality/fixed_wake_time_coverage_summary.csv
+out/verify_week_period_profile/data_quality/fixed_wake_time_coverage_by_session.csv
+out/verify_week_period_profile/data_quality/training_label_window_sensitivity.csv
+out/verify_week_period_profile/data_quality/alarm_label_window_sensitivity.csv
+out/verify_week_period_profile/data_quality/training_label_design_comparison.csv
+out/verify_week_period_profile/data_quality/alarm_label_design_comparison.csv
+```
+
+Fixed wake-time sweep is a coverage stress test, not a direct model-accuracy verdict.
+
+Current fixed wake-time coverage:
+
+```text
+05:00 evaluable 85.37% / evaluable-or-partial 86.79%
+06:00 evaluable 82.32% / evaluable-or-partial 85.98%
+07:00 evaluable 75.61% / evaluable-or-partial 77.85%
+08:00 evaluable 53.66% / evaluable-or-partial 59.76%
+09:00 evaluable 40.45% / evaluable-or-partial 42.68%
+10:00 evaluable 25.61% / evaluable-or-partial 29.67%
+11:00 evaluable 11.79% / evaluable-or-partial 13.62%
+```
+
+Interpretation:
+
+- Use the full recorded sleep-stage coverage for sequence model training.
+- Use historical wake-profile backtests as the primary model-development evaluation.
+- Use fixed wake-time sweeps to understand coverage and product-policy stress.
+- Compare model performance only on the same wake time and same coverage-qualified session set.
+- Treat `coverage_rate >= 70%` as suitable for model comparison, `40-70%` as reference-only, and `<40%` as unsuitable for model-performance judgment.
+
+Current label-design comparison:
+
+```text
+training all known candidates:
+  deep_within_5m:  10,153 / 146,927 = 6.91%
+  deep_within_10m: 18,973 / 146,927 = 12.91%
+  deep_within_15m: 26,879 / 146,927 = 18.29%
+  pre_entry_5_15m: 16,726 / 146,927 = 11.38%
+
+alarm-window known candidates:
+  deep_within_5m:     243 / 9,275 = 2.62%
+  deep_within_10m:    447 / 9,275 = 4.82%
+  deep_within_15m:    619 / 9,275 = 6.67%
+  pre_entry_5_15m:    376 / 9,275 = 4.05%
+```
+
+Interpretation:
+
+- Keep `deep_within_10m` as the primary Phase 2 target for now.
+- `deep_within_5m` is likely too sparse as the only target.
+- `deep_within_15m` may be useful as a broader risk target, but it can wake too early if used directly.
+- `pre_entry_5_15m` is a promising secondary target because it focuses on a less-immediate Deep pre-entry region while keeping a usable positive ratio.
+
 ## Phase 2 Sequence Dataset
 
 Build the first 60-minute sleep-pattern sequence dataset:
@@ -263,6 +369,20 @@ Default output:
 - `out/verify_week_period_profile/sequence_60m/sequence_metadata.csv`
 - `out/verify_week_period_profile/sequence_60m/sequence_summary.json`
 - `out/verify_week_period_profile/sequence_60m/stage_vocab.json`
+
+Current sequence metadata includes:
+
+```text
+sequence_awake_ratio
+sequence_light_ratio
+sequence_deep_ratio
+sequence_rem_ratio
+sequence_unknown_ratio
+sequence_stage_transition_count
+sequence_known_stage_transition_count
+```
+
+These are used as context features by `train_sequence_colab.py` when present.
 
 Inspect dataset quality:
 
@@ -322,6 +442,114 @@ python train_sequence_colab.py \
   --model-type cnn
 ```
 
+Run the standalone GRU tuning matrix:
+
+```bash
+python run_sequence_experiment_matrix.py --experiment-set gru
+```
+
+The GRU matrix currently runs:
+
+```text
+GRU(32) + Dense(16) + Dropout(0.2)
+GRU(64) + Dense(16) + Dropout(0.2)
+GRU(32) + Dense(32) + Dropout(0.2)
+GRU(64) + Dense(32) + Dropout(0.2)
+GRU(64) + Dense(32) + Dropout(0.0)
+```
+
+Run the CNN+GRU expansion matrix only after standalone GRU tuning is understood:
+
+```bash
+python run_sequence_experiment_matrix.py --experiment-set cnn_gru
+```
+
+Preview commands without training:
+
+```bash
+python run_sequence_experiment_matrix.py --experiment-set gru --dry-run
+```
+
+Current GRU tuning result:
+
+```text
+output:
+  out/verify_week_period_profile/sequence_experiments/gru/
+
+best raw GRU candidate:
+  gru64_dense32_dropout00
+
+threshold 0.4:
+  smart 138 / fallback 354 / deep_success 45 / strong_fail 88
+
+threshold 0.5:
+  smart 116 / fallback 376 / deep_success 41 / strong_fail 71
+
+threshold 0.6:
+  smart 80 / fallback 412 / deep_success 34 / strong_fail 43
+```
+
+Next step: rerun combined scoring with
+`out/verify_week_period_profile/sequence_experiments/gru/gru64_dense32_dropout00/alarm_predictions_long.csv`.
+
+Current tuned GRU combined scoring result:
+
+```text
+output:
+  out/verify_week_period_profile/combined_alarm_scores_gru64_dense32_dropout00/
+
+best deployment-style candidate:
+  combined_gru_50_tab_50 at threshold 0.55
+
+result:
+  smart 89 / fallback 403 / deep_success 39 / strong_fail 49
+  success_per_smart 0.438202
+```
+
+Selected initial deployment candidate:
+
+```text
+model family:
+  standalone GRU
+
+model artifact:
+  out/verify_week_period_profile/sequence_experiments/gru/gru64_dense32_dropout00/sequence_model.keras
+
+scoring:
+  combined_gru_50_tab_50
+  threshold 0.55
+```
+
+Convert the selected model to TensorFlow Lite in Colab/server:
+
+```bash
+python convert_sequence_model_tflite.py --float16
+```
+
+Expected output:
+
+```text
+out/verify_week_period_profile/tflite/gru64_dense32_dropout00/
+sequence_model_float32.tflite
+sequence_model_float16.tflite
+tflite_manifest.json
+context_scaler.json
+sequence_metrics.json
+```
+
+Current TFLite conversion result:
+
+```text
+float32 size: 275,956 bytes
+float16 size: 243,420 bytes
+rebuild max_abs_diff: 0.0
+float32 max_abs_diff: 1.4901161193847656e-07
+float32 mean_abs_diff: 1.1650932663087588e-08
+```
+
+Use `sequence_model_float32.tflite` first for Android output-parity validation. Use
+`sequence_model_float16.tflite` after app-side validation passes.
+
 Then compare against the tabular baseline:
 
 ```bash
@@ -350,6 +578,55 @@ Current alarm-window interpretation:
 - GRU improves deep-success count versus tabular at both `0.4` and `0.6`.
 - GRU also increases strong-fail count, so the next step is combined scoring rather than direct Android deployment.
 - CNN is weaker than GRU for this dataset.
+
+Build combined tabular + GRU + deadline-closeness score outputs:
+
+```bash
+python build_combined_alarm_scores.py
+```
+
+Compare the combined recipes:
+
+```bash
+python analyze_alarm_failures.py \
+  --model-dir out/verify_week_period_profile/model_eval \
+  --model-dir colab_result \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_50_tab_50 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_60_tab_30_deadline_10 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_60_tab_20_deadline_20 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_70_tab_20_deadline_10 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_60_tab_gate_0_4_deadline_10 \
+  --output-dir out/verify_week_period_profile/combined_alarm_scores/comparison
+```
+
+Run the current threshold sweep:
+
+```bash
+python analyze_alarm_failures.py \
+  --threshold 0.35 \
+  --threshold 0.4 \
+  --threshold 0.45 \
+  --threshold 0.5 \
+  --threshold 0.55 \
+  --threshold 0.6 \
+  --threshold 0.65 \
+  --threshold 0.7 \
+  --model-dir out/verify_week_period_profile/model_eval \
+  --model-dir colab_result \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_50_tab_50 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_60_tab_30_deadline_10 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_60_tab_20_deadline_20 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_70_tab_20_deadline_10 \
+  --model-dir out/verify_week_period_profile/combined_alarm_scores/combined_gru_60_tab_gate_0_4_deadline_10 \
+  --output-dir out/verify_week_period_profile/combined_alarm_scores/threshold_sweep
+```
+
+Current best combined tradeoff:
+
+```text
+combined_gru_60_tab_gate_0_4_deadline_10 at threshold 0.6:
+  smart 84 / fallback 408 / deep_success 38 / strong_fail 45
+```
 
 ## Evaluation Rules
 
