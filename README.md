@@ -32,8 +32,8 @@ If tests need sample data, use only tiny anonymized fixtures under
 - `build_sequence_dataset.py`: builds Phase 2 sleep-pattern sequence datasets
 - `analyze_sequence_dataset.py`: inspects Phase 2 sequence dataset quality
 - `train_sequence_model.py`: trains the first lightweight local sequence baseline
-- `train_sequence_colab.py`: trains the Colab/server GRU, 1D CNN, or CNN+GRU sequence model
-- `run_sequence_experiment_matrix.py`: runs GRU and CNN+GRU tuning matrices and alarm-window comparisons
+- `train_sequence_colab.py`: trains Colab/server GRU, CNN, CNN+GRU, TCN, or Transformer sequence models
+- `run_sequence_experiment_matrix.py`: runs sequence architecture matrices and alarm-window comparisons
 - `build_combined_alarm_scores.py`: combines tabular, sequence, and deadline-closeness alarm scores for comparison
 - `evaluate_decision_policies.py`: evaluates Android-compatible GRU/deadline/gate policies offline with coverage and utility metrics
 - `convert_sequence_model_tflite.py`: converts the selected Keras sequence model to TensorFlow Lite and verifies sample outputs
@@ -463,6 +463,31 @@ Run the CNN+GRU expansion matrix only after standalone GRU tuning is understood:
 
 ```bash
 python run_sequence_experiment_matrix.py --experiment-set cnn_gru
+```
+
+Run the post-GRU architecture expansion with one TCN, small Transformer, and
+CNN+GRU candidate while reusing an existing selected GRU result:
+
+```bash
+python run_sequence_experiment_matrix.py \
+  --sequence-dir out/latest_fixed_wake_policy/sequence_60m \
+  --predict-sequence-dir out/latest_fixed_wake_policy/sequence_60m_alarm \
+  --tabular-model-dir out/latest_fixed_wake_policy/model_tabular_tflite \
+  --comparison-model-dir out/latest_fixed_wake_policy/sequence_model_gru \
+  --output-root out/latest_fixed_wake_policy/sequence_experiments \
+  --experiment-set expanded \
+  --skip-existing
+```
+
+If no tabular prediction has been produced for the same dataset yet, add
+`--no-tabular-model` and compare sequence architectures first.
+
+The `expanded` set trains:
+
+```text
+TCN(64) + Dense(32) + Dropout(0.0), dilations 1/2/4/8
+Transformer(64, 4 heads, 2 blocks) + Dense(32) + Dropout(0.1)
+CNN(32) + GRU(64) + Dense(32) + Dropout(0.0)
 ```
 
 Preview commands without training:

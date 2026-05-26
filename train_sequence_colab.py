@@ -35,6 +35,7 @@ from sklearn.utils.class_weight import compute_class_weight
 
 TARGET = "label_deep_soon"
 DEFAULT_THRESHOLD = 0.5
+MODEL_TYPES = ["gru", "lstm", "cnn", "cnn_gru", "tcn", "transformer"]
 OUTPUT_COLUMNS = [
     "session_id",
     "candidate_time",
@@ -78,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sequence-dir", type=Path, required=True)
     parser.add_argument("--predict-sequence-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--model-type", choices=["gru", "lstm", "cnn", "cnn_gru"], default="gru")
+    parser.add_argument("--model-type", choices=MODEL_TYPES, default="gru")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--embedding-dim", type=int, default=8)
@@ -87,6 +88,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--context-units", type=int, default=16)
     parser.add_argument("--conv-filters", type=int, default=16)
     parser.add_argument("--conv-kernel-size", type=int, default=5)
+    parser.add_argument(
+        "--tcn-dilations",
+        default="1,2,4,8",
+        help="Comma-separated dilation rates for TCN residual blocks.",
+    )
+    parser.add_argument("--transformer-heads", type=int, default=4)
+    parser.add_argument("--transformer-layers", type=int, default=2)
+    parser.add_argument("--transformer-ff-dim", type=int, default=128)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
@@ -155,6 +164,10 @@ def build_model(
     context_units: int,
     conv_filters: int,
     conv_kernel_size: int,
+    tcn_dilations: tuple[int, ...],
+    transformer_heads: int,
+    transformer_layers: int,
+    transformer_ff_dim: int,
     dropout: float,
     learning_rate: float,
 ):
@@ -179,7 +192,7 @@ def build_model(
         )(x)
         x = layers.GlobalMaxPooling1D(name="stage_pool")(x)
         x = layers.Dropout(dropout)(x)
-    else:
+    elif model_type == "cnn_gru":
         x = layers.Conv1D(
             conv_filters,
             kernel_size=conv_kernel_size,
@@ -188,6 +201,78 @@ def build_model(
             name="stage_conv",
         )(x)
         x = layers.GRU(hidden_units, dropout=dropout, name="stage_gru")(x)
+    elif model_type == "tcn":
+        x = layers.Conv1D(hidden_units, kernel_size=1, padding="same", name="tcn_projection")(x)
+        for block_index, dilation in enumerate(tcn_dilations):
+            residual = x
+            y = layers.Conv1D(
+                hidden_units,
+                kernel_size=conv_kernel_size,
+                padding="causal",
+                dilation_rate=dilation,
+                activation="relu",
+                name=f"tcn_block_{block_index}_conv_1",
+            )(x)
+            y = layers.Dropout(dropout, name=f"tcn_block_{block_index}_dropout_1")(y)
+            y = layers.Conv1D(
+                hidden_units,
+                kernel_size=conv_kernel_size,
+                padding="causal",
+                dilation_rate=dilation,
+                activation="relu",
+                name=f"tcn_block_{block_index}_conv_2",
+            )(y)
+            y = layers.Dropout(dropout, name=f"tcn_block_{block_index}_dropout_2")(y)
+            x = layers.Add(name=f"tcn_block_{block_index}_residual")([residual, y])
+            x = layers.Activation("relu", name=f"tcn_block_{block_index}_activation")(x)
+        x = layers.GlobalAveragePooling1D(name="tcn_pool")(x)
+    else:
+        if transformer_heads < 1:
+            raise ValueError("--transformer-heads must be at least 1")
+        if transformer_layers < 1:
+            raise ValueError("--transformer-layers must be at least 1")
+        key_dim = max(1, hidden_units // transformer_heads)
+        x = layers.Dense(hidden_units, name="transformer_projection")(x)
+        position_indices = np.arange(window_minutes, dtype=np.int32)[None, :]
+        position_embedding = layers.Embedding(
+            input_dim=window_minutes,
+            output_dim=hidden_units,
+            name="position_embedding",
+        )(position_indices)
+        x = layers.Add(name="position_add")([x, position_embedding])
+        for block_index in range(transformer_layers):
+            attention_input = layers.LayerNormalization(
+                epsilon=1e-6,
+                name=f"transformer_block_{block_index}_attention_norm",
+            )(x)
+            attention = layers.MultiHeadAttention(
+                num_heads=transformer_heads,
+                key_dim=key_dim,
+                dropout=dropout,
+                name=f"transformer_block_{block_index}_attention",
+            )(attention_input, attention_input)
+            attention = layers.Dropout(dropout, name=f"transformer_block_{block_index}_attention_dropout")(
+                attention
+            )
+            x = layers.Add(name=f"transformer_block_{block_index}_attention_residual")([x, attention])
+            feed_forward_input = layers.LayerNormalization(
+                epsilon=1e-6,
+                name=f"transformer_block_{block_index}_ff_norm",
+            )(x)
+            feed_forward = layers.Dense(
+                transformer_ff_dim,
+                activation="relu",
+                name=f"transformer_block_{block_index}_ff_expand",
+            )(feed_forward_input)
+            feed_forward = layers.Dropout(dropout, name=f"transformer_block_{block_index}_ff_dropout")(
+                feed_forward
+            )
+            feed_forward = layers.Dense(hidden_units, name=f"transformer_block_{block_index}_ff_project")(
+                feed_forward
+            )
+            x = layers.Add(name=f"transformer_block_{block_index}_ff_residual")([x, feed_forward])
+        x = layers.LayerNormalization(epsilon=1e-6, name="transformer_output_norm")(x)
+        x = layers.GlobalAveragePooling1D(name="transformer_pool")(x)
     context_branch = layers.Dense(context_units, activation="relu", name="context_dense")(context_input)
     merged = layers.Concatenate(name="merge")([x, context_branch])
     merged = layers.Dense(dense_units, activation="relu", name="dense")(merged)
@@ -262,6 +347,16 @@ def available_context_columns(metadata: pd.DataFrame) -> list[str]:
     return [column for column in NUMERIC_CONTEXT_COLUMNS if column in metadata.columns]
 
 
+def parse_tcn_dilations(value: str) -> tuple[int, ...]:
+    try:
+        dilations = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as error:
+        raise ValueError("--tcn-dilations must contain comma-separated positive integers") from error
+    if not dilations or any(dilation < 1 for dilation in dilations):
+        raise ValueError("--tcn-dilations must contain comma-separated positive integers")
+    return dilations
+
+
 def main() -> None:
     args = parse_args()
     import tensorflow as tf
@@ -289,6 +384,7 @@ def main() -> None:
     class_values = np.array([0, 1])
     class_weights = compute_class_weight(class_weight="balanced", classes=class_values, y=y_train.to_numpy())
     class_weight = {int(label): float(weight) for label, weight in zip(class_values, class_weights)}
+    tcn_dilations = parse_tcn_dilations(args.tcn_dilations)
 
     model = build_model(
         args.model_type,
@@ -301,6 +397,10 @@ def main() -> None:
         context_units=args.context_units,
         conv_filters=args.conv_filters,
         conv_kernel_size=args.conv_kernel_size,
+        tcn_dilations=tcn_dilations,
+        transformer_heads=args.transformer_heads,
+        transformer_layers=args.transformer_layers,
+        transformer_ff_dim=args.transformer_ff_dim,
         dropout=args.dropout,
         learning_rate=args.learning_rate,
     )
@@ -340,6 +440,10 @@ def main() -> None:
             "context_units": args.context_units,
             "conv_filters": args.conv_filters,
             "conv_kernel_size": args.conv_kernel_size,
+            "tcn_dilations": list(tcn_dilations),
+            "transformer_heads": args.transformer_heads,
+            "transformer_layers": args.transformer_layers,
+            "transformer_ff_dim": args.transformer_ff_dim,
             "dropout": args.dropout,
             "learning_rate": args.learning_rate,
         },

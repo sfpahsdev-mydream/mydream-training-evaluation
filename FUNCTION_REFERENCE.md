@@ -218,8 +218,8 @@ Key functions:
 
 ## `train_sequence_colab.py`
 
-Purpose: train the real Phase 2 sequence model in TensorFlow: GRU, LSTM, CNN, or
-CNN+GRU.
+Purpose: train the real Phase 2 sequence model in TensorFlow: GRU, LSTM, CNN,
+CNN+GRU, TCN, or a small Transformer encoder.
 
 Main usage:
 
@@ -231,7 +231,8 @@ Key functions:
 
 - `load_dataset`: read `sequence_metadata.csv` and `sequence_stage_ids.npy`.
 - `standardize_context`: create `context_scaler.json`.
-- `build_model`: construct the selected sequence architecture.
+- `build_model`: construct the selected sequence architecture, including
+  causal dilated TCN residual blocks and Transformer attention blocks.
 - `metrics_for_split`, `threshold_report`: evaluate train/validation/test behavior.
 - `prediction_rows`: write compatible prediction CSVs for analysis.
 
@@ -244,7 +245,7 @@ Important outputs:
 
 ## `run_sequence_experiment_matrix.py`
 
-Purpose: run predefined GRU or CNN+GRU experiment grids.
+Purpose: run predefined GRU, CNN+GRU, or post-GRU expanded architecture grids.
 
 Main usage:
 
@@ -252,9 +253,15 @@ Main usage:
 .\.venv\Scripts\python.exe run_sequence_experiment_matrix.py --experiment-set gru --dry-run
 ```
 
+Expanded comparison against an already trained selected GRU:
+
+```bash
+python run_sequence_experiment_matrix.py --sequence-dir out/latest_fixed_wake_policy/sequence_60m --predict-sequence-dir out/latest_fixed_wake_policy/sequence_60m_alarm --tabular-model-dir out/latest_fixed_wake_policy/model_tabular_tflite --comparison-model-dir out/latest_fixed_wake_policy/sequence_model_gru --output-root out/latest_fixed_wake_policy/sequence_experiments --experiment-set expanded --skip-existing
+```
+
 Key functions:
 
-- `selected_experiments`: select GRU or CNN+GRU experiment definitions.
+- `selected_experiments`: select GRU, CNN+GRU, or expanded experiment definitions.
 - `train_command`: build the `train_sequence_colab.py` command.
 - `analyze_command`: build the comparison command after predictions exist.
 - `run_command`: execute or print commands.

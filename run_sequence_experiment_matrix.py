@@ -47,6 +47,19 @@ CNN_GRU_EXPERIMENTS = (
     Experiment("cnn32_gru64_dense32_dropout02", "cnn_gru", hidden_units=64, dense_units=32, dropout=0.2, conv_filters=32),
 )
 
+EXPANDED_ARCHITECTURE_EXPERIMENTS = (
+    Experiment("tcn64_dense32_dropout00", "tcn", hidden_units=64, dense_units=32, dropout=0.0),
+    Experiment("transformer64_dense32_dropout10", "transformer", hidden_units=64, dense_units=32, dropout=0.1),
+    Experiment(
+        "cnn32_gru64_dense32_dropout00",
+        "cnn_gru",
+        hidden_units=64,
+        dense_units=32,
+        dropout=0.0,
+        conv_filters=32,
+    ),
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MyDream sequence experiment matrix.")
@@ -54,10 +67,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--predict-sequence-dir", type=Path, default=DEFAULT_ALARM_SEQUENCE_DIR)
     parser.add_argument("--tabular-model-dir", type=Path, default=DEFAULT_TABULAR_MODEL_DIR)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--experiment-set", choices=["gru", "cnn_gru", "all"], default="gru")
+    parser.add_argument("--experiment-set", choices=["gru", "cnn_gru", "expanded", "all"], default="gru")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument(
+        "--comparison-model-dir",
+        type=Path,
+        action="append",
+        default=[],
+        help="Existing model output directory to include in final comparison without retraining. Repeatable.",
+    )
+    parser.add_argument(
+        "--no-tabular-model",
+        action="store_true",
+        help="Do not include --tabular-model-dir in final comparison.",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip training candidates whose output already contains alarm_predictions_long.csv.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
     return parser.parse_args()
 
@@ -67,7 +97,9 @@ def selected_experiments(name: str) -> tuple[Experiment, ...]:
         return GRU_TUNING_EXPERIMENTS
     if name == "cnn_gru":
         return CNN_GRU_EXPERIMENTS
-    return GRU_TUNING_EXPERIMENTS + CNN_GRU_EXPERIMENTS
+    if name == "expanded":
+        return EXPANDED_ARCHITECTURE_EXPERIMENTS
+    return GRU_TUNING_EXPERIMENTS + CNN_GRU_EXPERIMENTS + EXPANDED_ARCHITECTURE_EXPERIMENTS
 
 
 def run_command(command: list[str], dry_run: bool) -> None:
@@ -109,12 +141,11 @@ def train_command(args: argparse.Namespace, experiment: Experiment, output_dir: 
 
 
 def analyze_command(args: argparse.Namespace, model_dirs: list[Path], output_dir: Path) -> list[str]:
-    command = [
-        sys.executable,
-        "analyze_alarm_failures.py",
-        "--model-dir",
-        str(args.tabular_model_dir),
-    ]
+    command = [sys.executable, "analyze_alarm_failures.py"]
+    if not args.no_tabular_model:
+        command.extend(["--model-dir", str(args.tabular_model_dir)])
+    for model_dir in args.comparison_model_dir:
+        command.extend(["--model-dir", str(model_dir)])
     for model_dir in model_dirs:
         command.extend(["--model-dir", str(model_dir)])
     command.extend(["--output-dir", str(output_dir)])
@@ -131,6 +162,10 @@ def main() -> None:
     for experiment in experiments:
         model_dir = output_root / experiment.name
         model_dirs.append(model_dir)
+        predictions_path = model_dir / "alarm_predictions_long.csv"
+        if args.skip_existing and predictions_path.exists():
+            print(f"Skipping existing result: {predictions_path}")
+            continue
         run_command(train_command(args, experiment, model_dir), args.dry_run)
 
     comparison_dir = output_root / "alarm_failure_comparison"
