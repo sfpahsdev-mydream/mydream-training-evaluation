@@ -327,6 +327,44 @@ Important outputs:
 - `model_comparison_summary.csv`
 - `*_alarm_failure_cases_*.csv`
 
+## `evaluate_decision_policies.py`
+
+Purpose: evaluate the Android Lab decision-policy formulas offline from saved
+GRU/tabular prediction outputs with coverage-aware labels and utility metrics.
+
+Main usage:
+
+```powershell
+.\.venv\Scripts\python.exe evaluate_decision_policies.py --threshold 0.55 --output-dir out\verify_week_period_profile\policy_evaluation
+```
+
+Threshold sweep:
+
+```powershell
+.\.venv\Scripts\python.exe evaluate_decision_policies.py --sweep --output-dir out\verify_week_period_profile\policy_evaluation_sweep
+```
+
+Key functions:
+
+- `merge_inputs`: align GRU, tabular, candidate, and sequence metadata rows.
+- `actual_label`: recompute coverage-aware `label_deep_soon` from `stages.csv`.
+- `policy_decision`: apply Android-compatible GRU/deadline/gate score logic.
+- `summarize_policy`: calculate coverage, precision/recall, false/missed smart, and utility.
+- `session_summary`: export per-session utility distributions.
+
+Important outputs:
+
+- `policy_candidate_results.csv`
+- `policy_summary.csv`
+- `session_policy_summary.csv`
+- `threshold_sweep.csv` when a sweep is run
+
+Important constraint:
+
+- Use prediction files built from the same deadline candidate policy when
+  comparing results with an Android Lab run. The `--recent-days` option filters
+  rows only; it does not regenerate fixed target-wake candidates.
+
 ## `create_android_parity_sample.py`
 
 Purpose: create Android asset JSON files used to validate app-side GRU and
@@ -354,4 +392,3 @@ Important Android asset fields:
 - `tabular_raw_28`
 - `tabular_scaled_28`
 - `expected_tabular_score`
-

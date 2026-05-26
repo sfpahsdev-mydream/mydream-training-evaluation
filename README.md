@@ -35,6 +35,7 @@ If tests need sample data, use only tiny anonymized fixtures under
 - `train_sequence_colab.py`: trains the Colab/server GRU, 1D CNN, or CNN+GRU sequence model
 - `run_sequence_experiment_matrix.py`: runs GRU and CNN+GRU tuning matrices and alarm-window comparisons
 - `build_combined_alarm_scores.py`: combines tabular, sequence, and deadline-closeness alarm scores for comparison
+- `evaluate_decision_policies.py`: evaluates Android-compatible GRU/deadline/gate policies offline with coverage and utility metrics
 - `convert_sequence_model_tflite.py`: converts the selected Keras sequence model to TensorFlow Lite and verifies sample outputs
 - `mydream_lightgbm_colab.ipynb`: thin Colab runner for the training script
 - `README.md`: local and Colab workflow notes
@@ -627,6 +628,74 @@ Current best combined tradeoff:
 combined_gru_60_tab_gate_0_4_deadline_10 at threshold 0.6:
   smart 84 / fallback 408 / deep_success 38 / strong_fail 45
 ```
+
+## Offline Decision Policy Evaluation
+
+Use desktop evaluation for policy selection and threshold sweeps. Keep Android
+Lab evaluation focused on model/input parity, device latency, and a small
+latest-session dry run.
+
+Run the Android-compatible policy comparison for the current tuned GRU and
+tabular TFLite prediction outputs:
+
+```powershell
+.\.venv\Scripts\python.exe evaluate_decision_policies.py `
+  --threshold 0.55 `
+  --output-dir out\verify_week_period_profile\policy_evaluation
+```
+
+Run a threshold sweep:
+
+```powershell
+.\.venv\Scripts\python.exe evaluate_decision_policies.py `
+  --sweep `
+  --output-dir out\verify_week_period_profile\policy_evaluation_sweep
+```
+
+Optional period filter:
+
+```powershell
+.\.venv\Scripts\python.exe evaluate_decision_policies.py `
+  --recent-days 30 `
+  --threshold 0.55 `
+  --output-dir out\verify_week_period_profile\policy_evaluation_recent_30_days
+```
+
+The script evaluates these policies using the same score formulas and gate
+limits as the Android Lab implementation:
+
+- `GRU-only`
+- `GRU + deadline`
+- `GRU + strict deadline gate`
+- `GRU + unknown coverage gate`
+- `GRU + deadline + unknown gate`
+- `GRU + tabular`
+
+Inputs:
+
+- GRU `alarm_predictions_long.csv`
+- tabular `alarm_predictions_long.csv`
+- `alarm_candidates_1min.csv`
+- `sequence_60m_alarm/sequence_metadata.csv` for the 60-minute unknown ratio
+- `stages.csv` to recompute coverage-aware `Deep within 10m` labels
+
+Outputs:
+
+- `policy_candidate_results.csv`: candidate-level policy decisions and outcome labels
+- `policy_summary.csv`: coverage, precision/recall, false/missed smart, and utility summary
+- `session_policy_summary.csv`: session-level utility results
+- `threshold_sweep.csv`: written when multiple thresholds or `--sweep` are requested
+
+`target_unknown` rows have incomplete or unknown stage coverage through the
+10-minute target horizon. Candidates already in `Deep` are tracked as
+`excluded_already_deep`, consistent with training-target exclusion. Both are
+neutral in utility.
+
+To reproduce an Android `recent_30_days_target_wake_policy` run exactly, the
+input prediction and sequence metadata files must have been generated from the
+same target-wake deadline candidate set used on device. `--recent-days 30`
+only filters an already compatible candidate set; it does not change its wake
+deadline policy.
 
 ## Evaluation Rules
 
