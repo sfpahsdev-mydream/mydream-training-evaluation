@@ -63,6 +63,14 @@ EXPANDED_ARCHITECTURE_EXPERIMENTS = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MyDream sequence experiment matrix.")
+    parser.add_argument(
+        "--profile-root",
+        type=Path,
+        help=(
+            "Dataset/result root with sequence_60m, sequence_60m_alarm, sequence_model_gru, "
+            "and optional model_tabular_tflite children. Overrides default input/output roots."
+        ),
+    )
     parser.add_argument("--sequence-dir", type=Path, default=DEFAULT_SEQUENCE_DIR)
     parser.add_argument("--predict-sequence-dir", type=Path, default=DEFAULT_ALARM_SEQUENCE_DIR)
     parser.add_argument("--tabular-model-dir", type=Path, default=DEFAULT_TABULAR_MODEL_DIR)
@@ -89,7 +97,15 @@ def parse_args() -> argparse.Namespace:
         help="Skip training candidates whose output already contains alarm_predictions_long.csv.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.profile_root:
+        args.sequence_dir = args.profile_root / "sequence_60m"
+        args.predict_sequence_dir = args.profile_root / "sequence_60m_alarm"
+        args.tabular_model_dir = args.profile_root / "model_tabular_tflite"
+        args.output_root = args.profile_root / "sequence_experiments"
+        if not args.comparison_model_dir:
+            args.comparison_model_dir = [args.profile_root / "sequence_model_gru"]
+    return args
 
 
 def selected_experiments(name: str) -> tuple[Experiment, ...]:
@@ -156,7 +172,8 @@ def main() -> None:
     args = parse_args()
     experiments = selected_experiments(args.experiment_set)
     output_root = args.output_root / args.experiment_set
-    output_root.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        output_root.mkdir(parents=True, exist_ok=True)
 
     model_dirs: list[Path] = []
     for experiment in experiments:

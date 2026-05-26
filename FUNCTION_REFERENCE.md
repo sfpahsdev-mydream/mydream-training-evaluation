@@ -256,12 +256,14 @@ Main usage:
 Expanded comparison against an already trained selected GRU:
 
 ```bash
-python run_sequence_experiment_matrix.py --sequence-dir out/latest_fixed_wake_policy/sequence_60m --predict-sequence-dir out/latest_fixed_wake_policy/sequence_60m_alarm --tabular-model-dir out/latest_fixed_wake_policy/model_tabular_tflite --comparison-model-dir out/latest_fixed_wake_policy/sequence_model_gru --output-root out/latest_fixed_wake_policy/sequence_experiments --experiment-set expanded --skip-existing
+cd /content/mydream-training-evaluation
+python run_sequence_experiment_matrix.py --profile-root /content/mydream_latest/out/latest_fixed_wake_policy --experiment-set expanded --skip-existing
 ```
 
 Key functions:
 
 - `selected_experiments`: select GRU, CNN+GRU, or expanded experiment definitions.
+- `parse_args`: resolve `--profile-root` into the standard profile dataset and output folders.
 - `train_command`: build the `train_sequence_colab.py` command.
 - `analyze_command`: build the comparison command after predictions exist.
 - `run_command`: execute or print commands.

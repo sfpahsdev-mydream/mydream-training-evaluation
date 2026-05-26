@@ -468,19 +468,26 @@ python run_sequence_experiment_matrix.py --experiment-set cnn_gru
 Run the post-GRU architecture expansion with one TCN, small Transformer, and
 CNN+GRU candidate while reusing an existing selected GRU result:
 
+For the current Colab layout, keep code and generated results separate:
+
+```text
+code root:    /content/mydream-training-evaluation
+profile root: /content/mydream_latest/out/latest_fixed_wake_policy
+```
+
 ```bash
+cd /content/mydream-training-evaluation
 python run_sequence_experiment_matrix.py \
-  --sequence-dir out/latest_fixed_wake_policy/sequence_60m \
-  --predict-sequence-dir out/latest_fixed_wake_policy/sequence_60m_alarm \
-  --tabular-model-dir out/latest_fixed_wake_policy/model_tabular_tflite \
-  --comparison-model-dir out/latest_fixed_wake_policy/sequence_model_gru \
-  --output-root out/latest_fixed_wake_policy/sequence_experiments \
+  --profile-root /content/mydream_latest/out/latest_fixed_wake_policy \
   --experiment-set expanded \
   --skip-existing
 ```
 
-If no tabular prediction has been produced for the same dataset yet, add
-`--no-tabular-model` and compare sequence architectures first.
+`--profile-root` resolves `sequence_60m`, `sequence_60m_alarm`,
+`sequence_model_gru`, `model_tabular_tflite`, and `sequence_experiments`
+under the supplied root. If no tabular prediction has been produced for the
+same dataset yet, add `--no-tabular-model` and compare sequence architectures
+first.
 
 The `expanded` set trains:
 
