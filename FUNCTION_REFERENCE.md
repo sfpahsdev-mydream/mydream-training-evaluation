@@ -35,6 +35,7 @@ Colab/server-only TensorFlow or LightGBM steps:
 ```bash
 python train_lightgbm_colab.py --input-dir out/verify_week_period_profile --output-dir out/verify_week_period_profile/model_eval
 python train_sequence_colab.py --sequence-dir out/verify_week_period_profile/sequence_60m --predict-sequence-dir out/verify_week_period_profile/sequence_60m_alarm --output-dir out/verify_week_period_profile/sequence_experiments/gru/gru64_dense32_dropout00 --model-type gru --hidden-units 64 --dense-units 32 --dropout 0.0
+python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --threshold 0.55 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46
 python convert_sequence_model_tflite.py --float16
 python train_tabular_tflite_colab.py --input-dir out/verify_week_period_profile --output-dir out/verify_week_period_profile/model_tabular_tflite --float16
 ```
@@ -273,6 +274,24 @@ Key functions:
 - `train_command`: build the `train_sequence_colab.py` command.
 - `analyze_command`: build the comparison command after predictions exist.
 - `run_command`: execute or print commands.
+
+## `run_repeated_sequence_evaluation.py`
+
+Purpose: repeat GRU, Transformer, and CNN+GRU training across random seeds and
+aggregate the deployment-threshold comparison against GRU.
+
+Main usage:
+
+```bash
+python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --threshold 0.55 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46
+```
+
+Important outputs:
+
+- `sequence_experiments/repeated_evaluation/per_seed_summary.csv`
+- `sequence_experiments/repeated_evaluation/aggregate_summary.csv`
+- `sequence_experiments/repeated_evaluation/delta_vs_gru_per_seed.csv`
+- `sequence_experiments/repeated_evaluation/delta_vs_gru_summary.csv`
 
 ## `convert_sequence_model_tflite.py`
 

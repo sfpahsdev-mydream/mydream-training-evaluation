@@ -34,6 +34,7 @@ If tests need sample data, use only tiny anonymized fixtures under
 - `train_sequence_model.py`: trains the first lightweight local sequence baseline
 - `train_sequence_colab.py`: trains Colab/server GRU, CNN, CNN+GRU, TCN, or Transformer sequence models
 - `run_sequence_experiment_matrix.py`: runs sequence architecture matrices and alarm-window comparisons
+- `run_repeated_sequence_evaluation.py`: repeats selected sequence models across seeds and aggregates GRU deltas
 - `build_combined_alarm_scores.py`: combines tabular, sequence, and deadline-closeness alarm scores for comparison
 - `evaluate_decision_policies.py`: evaluates Android-compatible GRU/deadline/gate policies offline with coverage and utility metrics
 - `convert_sequence_model_tflite.py`: converts the selected Keras sequence model to TensorFlow Lite and verifies sample outputs
@@ -478,6 +479,7 @@ stages.csv / training_candidates_1min.csv / alarm_candidates_1min.csv
 sequence_60m/ / sequence_60m_alarm/
 sequence_experiments/gru/gru64_dense32_dropout00/
 sequence_experiments/expanded/
+sequence_experiments/repeated_evaluation/
 ```
 
 It then recomputes the deployment-relevant `0.55` threshold, displays
@@ -486,6 +488,8 @@ configuration uses a fixed wake-time policy of weekday `07:00` and weekend
 `09:00`; update those values in the settings cell when testing another policy.
 By default `REUSE_EXISTING_RESULTS = False`, so models are retrained for the
 configured input and policy. Set it to `True` only when resuming the same run.
+The repeated evaluation section trains GRU, Transformer, and CNN+GRU with five
+random seeds by default, so it runs 15 sequence-model training jobs.
 
 Open directly in Colab:
 
@@ -526,6 +530,28 @@ TCN(64) + Dense(32) + Dropout(0.0), dilations 1/2/4/8
 Transformer(64, 4 heads, 2 blocks) + Dense(32) + Dropout(0.1)
 CNN(32) + GRU(64) + Dense(32) + Dropout(0.0)
 ```
+
+Repeat the deployment-threshold comparison across random seeds:
+
+```bash
+python run_repeated_sequence_evaluation.py \
+  --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy \
+  --threshold 0.55 \
+  --seed 42 --seed 43 --seed 44 --seed 45 --seed 46
+```
+
+Repeated evaluation outputs:
+
+```text
+sequence_experiments/repeated_evaluation/seed_<seed>/
+sequence_experiments/repeated_evaluation/per_seed_summary.csv
+sequence_experiments/repeated_evaluation/aggregate_summary.csv
+sequence_experiments/repeated_evaluation/delta_vs_gru_per_seed.csv
+sequence_experiments/repeated_evaluation/delta_vs_gru_summary.csv
+```
+
+Use `delta_vs_gru_summary.csv` to decide whether Transformer or CNN+GRU
+consistently improves on GRU at threshold `0.55`.
 
 Preview commands without training:
 
