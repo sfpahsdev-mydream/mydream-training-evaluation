@@ -247,6 +247,11 @@ Important outputs:
 
 Purpose: run predefined GRU, CNN+GRU, or post-GRU expanded architecture grids.
 
+`mydream_expanded_model_comparison_colab.ipynb` is the end-to-end Colab runner.
+It creates preprocessing output, `sequence_60m`, `sequence_60m_alarm`, and
+`sequence_experiments/gru/gru64_dense32_dropout00` before invoking the
+expanded matrix.
+
 Main usage:
 
 ```powershell
@@ -258,7 +263,7 @@ Expanded comparison against the already trained selected GRU at
 
 ```bash
 cd /content/mydream-training-evaluation
-python run_sequence_experiment_matrix.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --experiment-set expanded --skip-existing
+python run_sequence_experiment_matrix.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --experiment-set expanded --comparison-model-dir /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy/sequence_experiments/gru/gru64_dense32_dropout00
 ```
 
 Key functions:

@@ -465,16 +465,27 @@ Run the CNN+GRU expansion matrix only after standalone GRU tuning is understood:
 python run_sequence_experiment_matrix.py --experiment-set cnn_gru
 ```
 
-Run the post-GRU architecture expansion with one TCN, small Transformer, and
-CNN+GRU candidate while reusing an existing selected GRU result:
-
-For a Colab workflow that trains the expanded candidates, recomputes the
-deployment-relevant `0.55` threshold, displays comparison tables/charts, and
-packages summary outputs for download, open:
+Run the Colab-first full sequence comparison workflow with:
 
 ```text
 mydream_expanded_model_comparison_colab.ipynb
 ```
+
+The notebook starts from a JSONL export stored on Google Drive and creates:
+
+```text
+stages.csv / training_candidates_1min.csv / alarm_candidates_1min.csv
+sequence_60m/ / sequence_60m_alarm/
+sequence_experiments/gru/gru64_dense32_dropout00/
+sequence_experiments/expanded/
+```
+
+It then recomputes the deployment-relevant `0.55` threshold, displays
+comparison tables/charts, and packages summary outputs. The initial notebook
+configuration uses a fixed wake-time policy of weekday `07:00` and weekend
+`09:00`; update those values in the settings cell when testing another policy.
+By default `REUSE_EXISTING_RESULTS = False`, so models are retrained for the
+configured input and policy. Set it to `True` only when resuming the same run.
 
 Open directly in Colab:
 
@@ -482,29 +493,31 @@ Open directly in Colab:
 https://colab.research.google.com/github/sfpahsdev-mydream/mydream-training-evaluation/blob/main/mydream_expanded_model_comparison_colab.ipynb
 ```
 
-For separate Colab runtimes, keep code in the runtime and persist generated
-results on Google Drive:
+Keep code in the runtime and persist input and generated results on Google
+Drive:
 
 ```text
 code root:    /content/mydream-training-evaluation
+raw JSONL:    /content/drive/MyDrive/mydream_latest/input/mydream_sleep.jsonl
 profile root: /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy
 ```
+
+The notebook runs the following expanded command only after it has generated
+the sequence datasets and the selected GRU result:
 
 ```bash
 cd /content/mydream-training-evaluation
 python run_sequence_experiment_matrix.py \
   --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy \
   --experiment-set expanded \
-  --skip-existing
+  --comparison-model-dir /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy/sequence_experiments/gru/gru64_dense32_dropout00
 ```
 
 `--profile-root` resolves `sequence_60m`, `sequence_60m_alarm`,
 `sequence_experiments/gru/gru64_dense32_dropout00`, `model_tabular_tflite`,
 and expanded `sequence_experiments` outputs under the supplied root. If no
 tabular prediction has been produced for the same dataset yet, add
-`--no-tabular-model` and compare sequence architectures first. The prerequisite
-sequence datasets and selected GRU result must already exist under this Drive
-folder before running the expanded notebook.
+`--no-tabular-model` and compare sequence architectures first.
 
 The `expanded` set trains:
 
