@@ -482,26 +482,29 @@ Open directly in Colab:
 https://colab.research.google.com/github/sfpahsdev-mydream/mydream-training-evaluation/blob/main/mydream_expanded_model_comparison_colab.ipynb
 ```
 
-For the current Colab layout, keep code and generated results separate:
+For separate Colab runtimes, keep code in the runtime and persist generated
+results on Google Drive:
 
 ```text
 code root:    /content/mydream-training-evaluation
-profile root: /content/mydream_latest/out/latest_fixed_wake_policy
+profile root: /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy
 ```
 
 ```bash
 cd /content/mydream-training-evaluation
 python run_sequence_experiment_matrix.py \
-  --profile-root /content/mydream_latest/out/latest_fixed_wake_policy \
+  --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy \
   --experiment-set expanded \
   --skip-existing
 ```
 
 `--profile-root` resolves `sequence_60m`, `sequence_60m_alarm`,
-`sequence_model_gru`, `model_tabular_tflite`, and `sequence_experiments`
-under the supplied root. If no tabular prediction has been produced for the
-same dataset yet, add `--no-tabular-model` and compare sequence architectures
-first.
+`sequence_experiments/gru/gru64_dense32_dropout00`, `model_tabular_tflite`,
+and expanded `sequence_experiments` outputs under the supplied root. If no
+tabular prediction has been produced for the same dataset yet, add
+`--no-tabular-model` and compare sequence architectures first. The prerequisite
+sequence datasets and selected GRU result must already exist under this Drive
+folder before running the expanded notebook.
 
 The `expanded` set trains:
 

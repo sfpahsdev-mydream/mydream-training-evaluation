@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         "--profile-root",
         type=Path,
         help=(
-            "Dataset/result root with sequence_60m, sequence_60m_alarm, sequence_model_gru, "
+            "Dataset/result root with sequence_60m, sequence_60m_alarm, sequence_experiments/gru, "
             "and optional model_tabular_tflite children. Overrides default input/output roots."
         ),
     )
@@ -104,7 +104,9 @@ def parse_args() -> argparse.Namespace:
         args.tabular_model_dir = args.profile_root / "model_tabular_tflite"
         args.output_root = args.profile_root / "sequence_experiments"
         if not args.comparison_model_dir:
-            args.comparison_model_dir = [args.profile_root / "sequence_model_gru"]
+            args.comparison_model_dir = [
+                args.profile_root / "sequence_experiments" / "gru" / "gru64_dense32_dropout00"
+            ]
     return args
 
 

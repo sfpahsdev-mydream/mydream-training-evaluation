@@ -253,11 +253,12 @@ Main usage:
 .\.venv\Scripts\python.exe run_sequence_experiment_matrix.py --experiment-set gru --dry-run
 ```
 
-Expanded comparison against an already trained selected GRU:
+Expanded comparison against the already trained selected GRU at
+`sequence_experiments/gru/gru64_dense32_dropout00`:
 
 ```bash
 cd /content/mydream-training-evaluation
-python run_sequence_experiment_matrix.py --profile-root /content/mydream_latest/out/latest_fixed_wake_policy --experiment-set expanded --skip-existing
+python run_sequence_experiment_matrix.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --experiment-set expanded --skip-existing
 ```
 
 Key functions:
