@@ -476,6 +476,12 @@ packages summary outputs for download, open:
 mydream_expanded_model_comparison_colab.ipynb
 ```
 
+Open directly in Colab:
+
+```text
+https://colab.research.google.com/github/sfpahsdev-mydream/mydream-training-evaluation/blob/main/mydream_expanded_model_comparison_colab.ipynb
+```
+
 For the current Colab layout, keep code and generated results separate:
 
 ```text
