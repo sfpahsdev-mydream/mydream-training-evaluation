@@ -35,7 +35,7 @@ Colab/server-only TensorFlow or LightGBM steps:
 ```bash
 python train_lightgbm_colab.py --input-dir out/verify_week_period_profile --output-dir out/verify_week_period_profile/model_eval
 python train_sequence_colab.py --sequence-dir out/verify_week_period_profile/sequence_60m --predict-sequence-dir out/verify_week_period_profile/sequence_60m_alarm --output-dir out/verify_week_period_profile/sequence_experiments/gru/gru64_dense32_dropout00 --model-type gru --hidden-units 64 --dense-units 32 --dropout 0.0
-python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --threshold 0.55 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46
+python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --threshold 0.4 --threshold 0.5 --threshold 0.55 --threshold 0.6 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46 --evaluate-policies
 python convert_sequence_model_tflite.py --float16
 python train_tabular_tflite_colab.py --input-dir out/verify_week_period_profile --output-dir out/verify_week_period_profile/model_tabular_tflite --float16
 ```
@@ -277,13 +277,14 @@ Key functions:
 
 ## `run_repeated_sequence_evaluation.py`
 
-Purpose: repeat GRU, Transformer, and CNN+GRU training across random seeds and
-aggregate the deployment-threshold comparison against GRU.
+Purpose: repeat GRU, TCN, Transformer, and CNN+GRU training across random
+seeds and thresholds, aggregate comparison against GRU, and optionally compare
+the same candidate-level policies for each model.
 
 Main usage:
 
 ```bash
-python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --threshold 0.55 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46
+python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --threshold 0.4 --threshold 0.5 --threshold 0.55 --threshold 0.6 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46 --evaluate-policies
 ```
 
 Important outputs:
@@ -292,6 +293,8 @@ Important outputs:
 - `sequence_experiments/repeated_evaluation/aggregate_summary.csv`
 - `sequence_experiments/repeated_evaluation/delta_vs_gru_per_seed.csv`
 - `sequence_experiments/repeated_evaluation/delta_vs_gru_summary.csv`
+- `sequence_experiments/repeated_evaluation/policy_per_seed_summary.csv`
+- `sequence_experiments/repeated_evaluation/policy_aggregate_summary.csv`
 
 ## `convert_sequence_model_tflite.py`
 
@@ -363,13 +366,14 @@ Important outputs:
 
 ## `evaluate_decision_policies.py`
 
-Purpose: evaluate the Android Lab decision-policy formulas offline from saved
-GRU/tabular prediction outputs with coverage-aware labels and utility metrics.
+Purpose: evaluate Android-compatible decision policies offline from one or
+more saved sequence-model prediction outputs and one tabular prediction output
+with coverage-aware labels and utility metrics.
 
 Main usage:
 
 ```powershell
-.\.venv\Scripts\python.exe evaluate_decision_policies.py --threshold 0.55 --output-dir out\verify_week_period_profile\policy_evaluation
+.\.venv\Scripts\python.exe evaluate_decision_policies.py --profile-root out\latest_fixed_wake_policy --sequence-prediction GRU=out\latest_fixed_wake_policy\sequence_experiments\gru\gru64_dense32_dropout00\alarm_predictions_long.csv --sequence-prediction TCN=out\latest_fixed_wake_policy\sequence_experiments\expanded\tcn64_dense32_dropout00\alarm_predictions_long.csv --sequence-prediction CNN+GRU=out\latest_fixed_wake_policy\sequence_experiments\expanded\cnn32_gru64_dense32_dropout00\alarm_predictions_long.csv --threshold 0.55 --output-dir out\latest_fixed_wake_policy\policy_evaluation
 ```
 
 Threshold sweep:
@@ -380,9 +384,9 @@ Threshold sweep:
 
 Key functions:
 
-- `merge_inputs`: align GRU, tabular, candidate, and sequence metadata rows.
+- `merge_inputs`: align each sequence model, tabular, candidate, and sequence metadata rows.
 - `actual_label`: recompute coverage-aware `label_deep_soon` from `stages.csv`.
-- `policy_decision`: apply Android-compatible GRU/deadline/gate score logic.
+- `policy_decision`: apply comparable sequence/deadline/gate/tabular score logic.
 - `summarize_policy`: calculate coverage, precision/recall, false/missed smart, and utility.
 - `session_summary`: export per-session utility distributions.
 

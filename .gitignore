@@ -14,6 +14,7 @@ env/
 out/
 colab_result/
 local_backup/
+repeated_evaluation/
 *.csv
 *.zip
 
@@ -23,6 +24,7 @@ local_backup/
 *.joblib
 *.onnx
 *.tflite
+*.keras
 
 # Reports generated from personal data
 data_quality_report.md

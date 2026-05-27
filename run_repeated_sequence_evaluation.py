@@ -27,6 +27,7 @@ class Experiment:
 
 EXPERIMENTS = (
     Experiment("gru64_dense32_dropout00", "gru", hidden_units=64, dense_units=32, dropout=0.0),
+    Experiment("tcn64_dense32_dropout00", "tcn", hidden_units=64, dense_units=32, dropout=0.0),
     Experiment("transformer64_dense32_dropout10", "transformer", hidden_units=64, dense_units=32, dropout=0.1),
     Experiment(
         "cnn32_gru64_dense32_dropout00",
@@ -38,6 +39,16 @@ EXPERIMENTS = (
     ),
 )
 METRICS = ("deep_success", "strong_fail", "success_per_smart", "sleep_quality_success", "smart_alarm")
+POLICY_METRICS = (
+    "precision",
+    "recall",
+    "utility_labeled",
+    "utility_all",
+    "true_smart",
+    "false_smart",
+    "missed_smart",
+    "coverage",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,14 +56,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--seed", type=int, action="append", dest="seeds")
-    parser.add_argument("--threshold", type=float, default=0.55)
+    parser.add_argument("--threshold", type=float, action="append", dest="thresholds")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--evaluate-policies",
+        action="store_true",
+        help="Run coverage-aware candidate policy evaluation for every repeated sequence model.",
+    )
+    parser.add_argument(
+        "--tabular-predictions",
+        type=Path,
+        help="Tabular alarm predictions used by --evaluate-policies. Defaults under --profile-root.",
+    )
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     args.seeds = args.seeds or list(DEFAULT_SEEDS)
+    args.thresholds = args.thresholds or [0.55]
     args.output_root = args.output_root or args.profile_root / "sequence_experiments" / "repeated_evaluation"
+    args.tabular_predictions = (
+        args.tabular_predictions or args.profile_root / "model_tabular_tflite" / "alarm_predictions_long.csv"
+    )
     return args
 
 
@@ -101,16 +126,32 @@ def analyze_command(project_root: Path, args: argparse.Namespace, model_dirs: li
     command = [sys.executable, str(project_root / "analyze_alarm_failures.py")]
     for model_dir in model_dirs:
         command.extend(["--model-dir", str(model_dir)])
-    command.extend(
-        [
-            "--threshold",
-            str(args.threshold),
-            "--focus-threshold",
-            str(args.threshold),
-            "--output-dir",
-            str(output_dir),
-        ]
-    )
+    for threshold in args.thresholds:
+        command.extend(["--threshold", str(threshold), "--focus-threshold", str(threshold)])
+    command.extend(["--output-dir", str(output_dir)])
+    return command
+
+
+def policy_command(project_root: Path, args: argparse.Namespace, model_dirs: list[Path], output_dir: Path) -> list[str]:
+    command = [
+        sys.executable,
+        str(project_root / "evaluate_decision_policies.py"),
+        "--profile-root",
+        str(args.profile_root),
+        "--tabular-predictions",
+        str(args.tabular_predictions),
+        "--output-dir",
+        str(output_dir),
+    ]
+    for model_dir in model_dirs:
+        command.extend(
+            [
+                "--sequence-prediction",
+                f"{model_dir.name}={model_dir / 'alarm_predictions_long.csv'}",
+            ]
+        )
+    for threshold in args.thresholds:
+        command.extend(["--threshold", str(threshold)])
     return command
 
 
@@ -120,7 +161,7 @@ def aggregate_results(args: argparse.Namespace, summary_frames: list[pd.DataFram
 
     numeric_metrics = [metric for metric in METRICS if metric in per_seed.columns]
     aggregate = (
-        per_seed.groupby("model", as_index=False)[numeric_metrics]
+        per_seed.groupby(["model", "threshold"], as_index=False)[numeric_metrics]
         .agg(["mean", "std", "min", "max"])
         .reset_index()
     )
@@ -130,32 +171,46 @@ def aggregate_results(args: argparse.Namespace, summary_frames: list[pd.DataFram
     ]
     aggregate.to_csv(args.output_root / "aggregate_summary.csv", index=False)
 
-    baseline = per_seed[per_seed["model"] == "gru64_dense32_dropout00"].set_index("seed")
-    delta_rows: list[dict[str, float | int | str]] = []
-    for model, model_rows in per_seed.groupby("model"):
-        if model == "gru64_dense32_dropout00":
-            continue
-        for row in model_rows.itertuples(index=False):
-            reference = baseline.loc[row.seed]
-            delta_rows.append(
-                {
-                    "seed": int(row.seed),
-                    "model": model,
-                    "deep_success_delta_vs_gru": int(row.deep_success - reference["deep_success"]),
-                    "strong_fail_delta_vs_gru": int(row.strong_fail - reference["strong_fail"]),
-                    "success_per_smart_delta_vs_gru": float(
-                        row.success_per_smart - reference["success_per_smart"]
-                    ),
-                    "sleep_quality_success_delta_vs_gru": float(
-                        row.sleep_quality_success - reference["sleep_quality_success"]
-                    ),
-                }
-            )
-    deltas = pd.DataFrame(delta_rows)
+    baseline_name = "gru64_dense32_dropout00"
+    baseline = per_seed[per_seed["model"] == baseline_name].loc[
+        :, ["seed", "threshold", "deep_success", "strong_fail", "success_per_smart", "sleep_quality_success"]
+    ]
+    baseline = baseline.rename(
+        columns={
+            "deep_success": "deep_success_gru",
+            "strong_fail": "strong_fail_gru",
+            "success_per_smart": "success_per_smart_gru",
+            "sleep_quality_success": "sleep_quality_success_gru",
+        }
+    )
+    deltas = per_seed[per_seed["model"] != baseline_name].merge(
+        baseline,
+        on=["seed", "threshold"],
+        how="left",
+        validate="many_to_one",
+    )
+    deltas["deep_success_delta_vs_gru"] = deltas["deep_success"] - deltas["deep_success_gru"]
+    deltas["strong_fail_delta_vs_gru"] = deltas["strong_fail"] - deltas["strong_fail_gru"]
+    deltas["success_per_smart_delta_vs_gru"] = deltas["success_per_smart"] - deltas["success_per_smart_gru"]
+    deltas["sleep_quality_success_delta_vs_gru"] = (
+        deltas["sleep_quality_success"] - deltas["sleep_quality_success_gru"]
+    )
+    deltas = deltas.loc[
+        :,
+        [
+            "seed",
+            "threshold",
+            "model",
+            "deep_success_delta_vs_gru",
+            "strong_fail_delta_vs_gru",
+            "success_per_smart_delta_vs_gru",
+            "sleep_quality_success_delta_vs_gru",
+        ],
+    ]
     deltas.to_csv(args.output_root / "delta_vs_gru_per_seed.csv", index=False)
 
     delta_summary = (
-        deltas.groupby("model", as_index=False)
+        deltas.groupby(["model", "threshold"], as_index=False)
         .agg(
             seeds=("seed", "count"),
             deep_success_delta_mean=("deep_success_delta_vs_gru", "mean"),
@@ -174,6 +229,24 @@ def aggregate_results(args: argparse.Namespace, summary_frames: list[pd.DataFram
     print(f"Wrote {args.output_root / 'delta_vs_gru_summary.csv'}")
 
 
+def aggregate_policy_results(args: argparse.Namespace, policy_frames: list[pd.DataFrame]) -> None:
+    per_seed = pd.concat(policy_frames, ignore_index=True)
+    per_seed.to_csv(args.output_root / "policy_per_seed_summary.csv", index=False)
+    numeric_metrics = [metric for metric in POLICY_METRICS if metric in per_seed.columns]
+    aggregate = (
+        per_seed.groupby(["sequence_model", "policy_variant", "threshold"], as_index=False)[numeric_metrics]
+        .agg(["mean", "std", "min", "max"])
+        .reset_index()
+    )
+    aggregate.columns = [
+        column if isinstance(column, str) else "_".join(part for part in column if part)
+        for column in aggregate.columns
+    ]
+    aggregate.to_csv(args.output_root / "policy_aggregate_summary.csv", index=False)
+    print(f"Wrote {args.output_root / 'policy_per_seed_summary.csv'}")
+    print(f"Wrote {args.output_root / 'policy_aggregate_summary.csv'}")
+
+
 def main() -> None:
     args = parse_args()
     project_root = Path(__file__).resolve().parent
@@ -181,6 +254,7 @@ def main() -> None:
         args.output_root.mkdir(parents=True, exist_ok=True)
 
     summary_frames: list[pd.DataFrame] = []
+    policy_frames: list[pd.DataFrame] = []
     for seed in args.seeds:
         seed_root = args.output_root / f"seed_{seed}"
         model_dirs: list[Path] = []
@@ -199,9 +273,18 @@ def main() -> None:
             seed_summary = pd.read_csv(comparison_dir / "model_comparison_summary.csv")
             seed_summary.insert(0, "seed", seed)
             summary_frames.append(seed_summary)
+        if args.evaluate_policies:
+            policy_dir = seed_root / "policy_evaluation"
+            run(policy_command(project_root, args, model_dirs, policy_dir), args.dry_run)
+            if not args.dry_run:
+                policy_summary = pd.read_csv(policy_dir / "policy_summary.csv")
+                policy_summary.insert(0, "seed", seed)
+                policy_frames.append(policy_summary)
 
     if not args.dry_run:
         aggregate_results(args, summary_frames)
+        if args.evaluate_policies:
+            aggregate_policy_results(args, policy_frames)
 
 
 if __name__ == "__main__":

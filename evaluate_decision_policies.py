@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Evaluate Android-compatible MyDream alarm decision policies offline.
 
-This script compares candidate-level policy decisions from saved GRU and
-tabular prediction files. Unlike the on-device Lab screen, it is intended for
-repeatable desktop analysis, threshold sweeps, and CSV export.
+This script compares candidate-level policy decisions from one or more saved
+sequence-model prediction files and one tabular prediction file. Unlike the
+on-device Lab screen, it is intended for repeatable offline model selection,
+threshold sweeps, and CSV export.
 """
 
 from __future__ import annotations
@@ -31,56 +32,62 @@ SWEEP_THRESHOLDS = tuple(round(value / 100, 2) for value in range(30, 76, 5))
 
 @dataclass(frozen=True)
 class Policy:
-    name: str
+    variant: str
 
 
 POLICIES = (
-    Policy("GRU-only"),
-    Policy("GRU + deadline"),
-    Policy("GRU + strict deadline gate"),
-    Policy("GRU + unknown coverage gate"),
-    Policy("GRU + deadline + unknown gate"),
-    Policy("GRU + tabular"),
+    Policy("only"),
+    Policy("deadline"),
+    Policy("strict deadline gate"),
+    Policy("unknown coverage gate"),
+    Policy("deadline + unknown gate"),
+    Policy("tabular"),
+    Policy("tabular + deadline"),
+    Policy("tabular + deadline + unknown gate"),
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate Android-compatible wake decision policies.")
     parser.add_argument(
+        "--profile-root",
+        type=Path,
+        help="Dataset/result root. Resolves candidate, metadata, stage, and default model paths underneath it.",
+    )
+    parser.add_argument(
         "--gru-predictions",
         type=Path,
-        default=Path(
-            "out/verify_week_period_profile/sequence_experiments/gru/"
-            "gru64_dense32_dropout00/alarm_predictions_long.csv"
-        ),
+        help="Backward-compatible single GRU prediction path. Ignored when --sequence-prediction is supplied.",
+    )
+    parser.add_argument(
+        "--sequence-prediction",
+        action="append",
+        dest="sequence_predictions",
+        metavar="NAME=PATH",
+        help="Sequence-model alarm prediction file to evaluate. Repeat for comparable models.",
     )
     parser.add_argument(
         "--tabular-predictions",
         type=Path,
-        default=Path("out/verify_week_period_profile/model_tabular_tflite/alarm_predictions_long.csv"),
     )
     parser.add_argument(
         "--candidates",
         type=Path,
-        default=Path("out/verify_week_period_profile/alarm_candidates_1min.csv"),
         help="Candidate features used for unknown-coverage gate inputs.",
     )
     parser.add_argument(
         "--sequence-metadata",
         type=Path,
-        default=Path("out/verify_week_period_profile/sequence_60m_alarm/sequence_metadata.csv"),
         help="Sequence metadata containing the Android-compatible 60-minute unknown ratio.",
     )
     parser.add_argument(
         "--stages",
         type=Path,
-        default=Path("out/verify_week_period_profile/stages.csv"),
         help="Stage intervals used to recompute Android-compatible target coverage.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("out/verify_week_period_profile/policy_evaluation"),
     )
     parser.add_argument("--threshold", type=float, action="append", help="Decision threshold. Repeatable.")
     parser.add_argument(
@@ -93,7 +100,17 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Only evaluate sessions in the last N deadline dates of the supplied candidate set.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    root = args.profile_root or Path("out/verify_week_period_profile")
+    args.gru_predictions = args.gru_predictions or (
+        root / "sequence_experiments" / "gru" / "gru64_dense32_dropout00" / "alarm_predictions_long.csv"
+    )
+    args.tabular_predictions = args.tabular_predictions or root / "model_tabular_tflite" / "alarm_predictions_long.csv"
+    args.candidates = args.candidates or root / "alarm_candidates_1min.csv"
+    args.sequence_metadata = args.sequence_metadata or root / "sequence_60m_alarm" / "sequence_metadata.csv"
+    args.stages = args.stages or root / "stages.csv"
+    args.output_dir = args.output_dir or root / "policy_evaluation"
+    return args
 
 
 def read_predictions(path: Path, score_column: str) -> pd.DataFrame:
@@ -156,16 +173,30 @@ def read_stages(path: Path) -> dict[str, list[tuple[pd.Timestamp, pd.Timestamp, 
     return by_session
 
 
-def merge_inputs(args: argparse.Namespace) -> pd.DataFrame:
-    gru = read_predictions(args.gru_predictions, "gru_score")
+def parse_sequence_predictions(args: argparse.Namespace) -> list[tuple[str, Path]]:
+    if not args.sequence_predictions:
+        return [("GRU", args.gru_predictions)]
+    predictions = []
+    for item in args.sequence_predictions:
+        if "=" not in item:
+            raise ValueError(f"--sequence-prediction must use NAME=PATH format: {item}")
+        name, path_text = item.split("=", 1)
+        if not name.strip() or not path_text.strip():
+            raise ValueError(f"--sequence-prediction must use NAME=PATH format: {item}")
+        predictions.append((name.strip(), Path(path_text.strip())))
+    return predictions
+
+
+def merge_inputs(args: argparse.Namespace, sequence_prediction: Path) -> pd.DataFrame:
+    sequence = read_predictions(sequence_prediction, "sequence_score")
     tabular = read_predictions(args.tabular_predictions, "tabular_score")
     candidates = read_candidates(args.candidates, args.sequence_metadata)
-    merged = candidates.merge(gru, on=KEY_COLUMNS, how="inner", validate="one_to_one")
+    merged = candidates.merge(sequence, on=KEY_COLUMNS, how="inner", validate="one_to_one")
     merged = merged.merge(tabular, on=KEY_COLUMNS, how="inner", validate="one_to_one")
-    if len(merged) != len(gru) or len(merged) != len(tabular):
+    if len(merged) != len(sequence) or len(merged) != len(tabular):
         raise ValueError(
             "Prediction files and candidates do not align exactly after merge: "
-            f"candidates={len(candidates)}, gru={len(gru)}, tabular={len(tabular)}, merged={len(merged)}"
+            f"candidates={len(candidates)}, sequence={len(sequence)}, tabular={len(tabular)}, merged={len(merged)}"
         )
     merged["candidate_dt"] = pd.to_datetime(merged["candidate_time"], utc=True)
     merged["deadline_dt"] = pd.to_datetime(merged["deadline_time"], utc=True)
@@ -234,37 +265,55 @@ def add_actual_labels(
     return output
 
 
-def policy_decision(frame: pd.DataFrame, policy: Policy, threshold: float) -> pd.DataFrame:
+def policy_decision(frame: pd.DataFrame, sequence_model: str, policy: Policy, threshold: float) -> pd.DataFrame:
     output = frame.copy()
-    if policy.name == "GRU-only":
-        output["score"] = output["gru_score"]
+    if policy.variant == "only":
+        output["score"] = output["sequence_score"]
         output["decision"] = "SMART_WAKE"
-    elif policy.name == "GRU + deadline":
-        output["score"] = GRU_WEIGHT * output["gru_score"] + DEADLINE_WEIGHT * output["deadline_closeness"]
+    elif policy.variant == "deadline":
+        output["score"] = GRU_WEIGHT * output["sequence_score"] + DEADLINE_WEIGHT * output["deadline_closeness"]
         output["decision"] = "SMART_WAKE"
-    elif policy.name == "GRU + strict deadline gate":
-        output["score"] = output["gru_score"]
+    elif policy.variant == "strict deadline gate":
+        output["score"] = output["sequence_score"]
         output["decision"] = output["minutes_before_deadline"].gt(STRICT_DEADLINE_GATE_MINUTES).map(
             {True: "SKIP_TOO_EARLY", False: "SMART_WAKE"}
         )
-    elif policy.name == "GRU + unknown coverage gate":
-        output["score"] = output["gru_score"]
+    elif policy.variant == "unknown coverage gate":
+        output["score"] = output["sequence_score"]
         output["decision"] = output["sequence_unknown_ratio"].gt(UNKNOWN_RATIO_LIMIT).map(
             {True: "SKIP_UNKNOWN_TOO_HIGH", False: "SMART_WAKE"}
         )
-    elif policy.name == "GRU + deadline + unknown gate":
-        output["score"] = GRU_WEIGHT * output["gru_score"] + DEADLINE_WEIGHT * output["deadline_closeness"]
+    elif policy.variant == "deadline + unknown gate":
+        output["score"] = GRU_WEIGHT * output["sequence_score"] + DEADLINE_WEIGHT * output["deadline_closeness"]
         output["decision"] = output["sequence_unknown_ratio"].gt(UNKNOWN_RATIO_LIMIT).map(
             {True: "SKIP_UNKNOWN_TOO_HIGH", False: "SMART_WAKE"}
         )
-    elif policy.name == "GRU + tabular":
-        output["score"] = 0.5 * output["gru_score"] + 0.5 * output["tabular_score"]
+    elif policy.variant == "tabular":
+        output["score"] = 0.5 * output["sequence_score"] + 0.5 * output["tabular_score"]
         output["decision"] = "SMART_WAKE"
+    elif policy.variant == "tabular + deadline":
+        output["score"] = (
+            0.4 * output["sequence_score"]
+            + 0.4 * output["tabular_score"]
+            + DEADLINE_WEIGHT * output["deadline_closeness"]
+        )
+        output["decision"] = "SMART_WAKE"
+    elif policy.variant == "tabular + deadline + unknown gate":
+        output["score"] = (
+            0.4 * output["sequence_score"]
+            + 0.4 * output["tabular_score"]
+            + DEADLINE_WEIGHT * output["deadline_closeness"]
+        )
+        output["decision"] = output["sequence_unknown_ratio"].gt(UNKNOWN_RATIO_LIMIT).map(
+            {True: "SKIP_UNKNOWN_TOO_HIGH", False: "SMART_WAKE"}
+        )
     else:
-        raise ValueError(f"Unknown policy: {policy.name}")
+        raise ValueError(f"Unknown policy: {policy.variant}")
     score_below = output["score"] < threshold
     output.loc[output["decision"].eq("SMART_WAKE") & score_below, "decision"] = "WAIT"
-    output["policy"] = policy.name
+    output["sequence_model"] = sequence_model
+    output["policy_variant"] = policy.variant
+    output["policy"] = f"{sequence_model}-{policy.variant}" if policy.variant == "only" else f"{sequence_model} + {policy.variant}"
     output["threshold"] = threshold
     labeled = output["target_status"].eq("labeled")
     actual = output["actual_deep_soon"].eq(True)
@@ -294,10 +343,12 @@ def summarize_policy(frame: pd.DataFrame) -> dict[str, Any]:
     actual_positive = int(labeled["actual_deep_soon"].eq(True).sum())
     utility_sum = int(frame["utility"].sum())
     per_session = labeled.groupby("session_id")["utility"].mean()
-    input_columns = ["gru_score", "tabular_score", "sequence_unknown_ratio", "score"]
+    input_columns = ["sequence_score", "tabular_score", "sequence_unknown_ratio", "score"]
     invalid_inputs = int((~np.isfinite(frame[input_columns].to_numpy(dtype=float))).any(axis=1).sum())
     return {
         "policy": frame["policy"].iat[0],
+        "sequence_model": frame["sequence_model"].iat[0],
+        "policy_variant": frame["policy_variant"].iat[0],
         "threshold": float(frame["threshold"].iat[0]),
         "samples": sample_count,
         "sessions": int(frame["session_id"].nunique()),
@@ -337,7 +388,7 @@ def session_summary(frame: pd.DataFrame) -> pd.DataFrame:
     labeled = frame[frame["target_status"] == "labeled"].copy()
     if labeled.empty:
         return pd.DataFrame()
-    grouped = labeled.groupby(["policy", "threshold", "session_id"], as_index=False)
+    grouped = labeled.groupby(["sequence_model", "policy_variant", "policy", "threshold", "session_id"], as_index=False)
     summary = grouped.agg(
         labeled=("actual_deep_soon", "size"),
         actual_deep_soon=("actual_deep_soon", lambda series: int(series.eq(True).sum())),
@@ -355,21 +406,25 @@ def main() -> None:
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    candidates = merge_inputs(args)
-    labeled_candidates = add_actual_labels(candidates, read_stages(args.stages))
+    stages = read_stages(args.stages)
     policy_frames: list[pd.DataFrame] = []
     summary_rows: list[dict[str, Any]] = []
-    for threshold in thresholds:
-        for policy in POLICIES:
-            evaluated = policy_decision(labeled_candidates, policy, threshold)
-            policy_frames.append(evaluated)
-            summary_rows.append(summarize_policy(evaluated))
+    for sequence_model, sequence_prediction in parse_sequence_predictions(args):
+        candidates = merge_inputs(args, sequence_prediction)
+        labeled_candidates = add_actual_labels(candidates, stages)
+        for threshold in thresholds:
+            for policy in POLICIES:
+                evaluated = policy_decision(labeled_candidates, sequence_model, policy, threshold)
+                policy_frames.append(evaluated)
+                summary_rows.append(summarize_policy(evaluated))
 
     all_results = pd.concat(policy_frames, ignore_index=True)
     details_columns = KEY_COLUMNS + [
         "policy",
+        "sequence_model",
+        "policy_variant",
         "threshold",
-        "gru_score",
+        "sequence_score",
         "tabular_score",
         "deadline_closeness",
         "sequence_unknown_ratio",
