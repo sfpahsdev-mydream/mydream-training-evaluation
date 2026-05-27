@@ -468,6 +468,14 @@ python run_sequence_experiment_matrix.py --experiment-set cnn_gru
 Run the post-GRU architecture expansion with one TCN, small Transformer, and
 CNN+GRU candidate while reusing an existing selected GRU result:
 
+For a Colab workflow that trains the expanded candidates, recomputes the
+deployment-relevant `0.55` threshold, displays comparison tables/charts, and
+packages summary outputs for download, open:
+
+```text
+mydream_expanded_model_comparison_colab.ipynb
+```
+
 For the current Colab layout, keep code and generated results separate:
 
 ```text
