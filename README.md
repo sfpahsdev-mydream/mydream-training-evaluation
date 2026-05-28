@@ -511,9 +511,9 @@ RUN_ENV = "local"
 ```
 
 Local mode uses the current working directory as `CODE_ROOT`, reads
-`mydream_sleep_2026-05-18.jsonl` from that folder by default, and writes outputs
-under `out/latest_fixed_wake_policy/`. TensorFlow automatically uses a GPU when
-available; if no GPU is detected, the notebook continues on CPU.
+`local_backup/mydream_current/mydream_sleep_latest.jsonl` by default, and
+writes outputs under `out/latest_fixed_wake_policy/`. TensorFlow automatically
+uses a GPU when available; if no GPU is detected, the notebook continues on CPU.
 
 Keep code in the runtime and persist input and generated results on Google
 Drive:
