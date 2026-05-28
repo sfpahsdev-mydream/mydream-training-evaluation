@@ -142,6 +142,82 @@ LARGE_CAPACITY_EXPERIMENTS = (
     ),
 )
 
+ADVANCED_EXPERIMENTS = (
+    Experiment(
+        "lstm128_dense64_dropout10",
+        "lstm",
+        hidden_units=128,
+        dense_units=64,
+        dropout=0.1,
+        context_units=32,
+    ),
+    Experiment(
+        "lstm256_dense128_dropout10",
+        "lstm",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+    ),
+    Experiment(
+        "bigru128_dense128_dropout10",
+        "bigru",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+    ),
+    Experiment(
+        "bigru_attention128_dense128_dropout10",
+        "bigru_attention",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+    ),
+    Experiment(
+        "tcn128_attention_dense128_dropout10",
+        "tcn_attention",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=128,
+    ),
+    Experiment(
+        "inception64_dense128_dropout10",
+        "inception_time",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=64,
+    ),
+    Experiment(
+        "transformer128_tcn_dense128_dropout10",
+        "transformer_tcn",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=128,
+        transformer_heads=4,
+        transformer_layers=2,
+        transformer_ff_dim=256,
+    ),
+    Experiment(
+        "patchtst128_dense128_dropout10",
+        "patchtst_lite",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        transformer_heads=4,
+        transformer_layers=2,
+        transformer_ff_dim=256,
+    ),
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MyDream sequence experiment matrix.")
@@ -157,7 +233,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--predict-sequence-dir", type=Path, default=DEFAULT_ALARM_SEQUENCE_DIR)
     parser.add_argument("--tabular-model-dir", type=Path, default=DEFAULT_TABULAR_MODEL_DIR)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--experiment-set", choices=["gru", "cnn_gru", "expanded", "large", "all"], default="gru")
+    parser.add_argument(
+        "--experiment-set",
+        choices=["gru", "cnn_gru", "expanded", "large", "advanced", "all"],
+        default="gru",
+    )
+    parser.add_argument(
+        "--include-experiment",
+        action="append",
+        default=[],
+        help="Only run the named experiment. Repeatable. Applied after --experiment-set selection.",
+    )
+    parser.add_argument(
+        "--exclude-experiment",
+        action="append",
+        default=[],
+        help="Skip the named experiment. Repeatable. Applied after --experiment-set selection.",
+    )
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--random-state", type=int, default=42)
@@ -201,12 +293,39 @@ def selected_experiments(name: str) -> tuple[Experiment, ...]:
         return EXPANDED_ARCHITECTURE_EXPERIMENTS
     if name == "large":
         return LARGE_CAPACITY_EXPERIMENTS
+    if name == "advanced":
+        return ADVANCED_EXPERIMENTS
     return (
         GRU_TUNING_EXPERIMENTS
         + CNN_GRU_EXPERIMENTS
         + EXPANDED_ARCHITECTURE_EXPERIMENTS
         + LARGE_CAPACITY_EXPERIMENTS
+        + ADVANCED_EXPERIMENTS
     )
+
+
+def filter_experiments(
+    experiments: tuple[Experiment, ...],
+    include_names: list[str],
+    exclude_names: list[str],
+) -> tuple[Experiment, ...]:
+    known_names = {experiment.name for experiment in experiments}
+    unknown_includes = sorted(set(include_names) - known_names)
+    unknown_excludes = sorted(set(exclude_names) - known_names)
+    if unknown_includes:
+        raise ValueError(f"Unknown --include-experiment value(s): {', '.join(unknown_includes)}")
+    if unknown_excludes:
+        raise ValueError(f"Unknown --exclude-experiment value(s): {', '.join(unknown_excludes)}")
+    selected = experiments
+    if include_names:
+        include_set = set(include_names)
+        selected = tuple(experiment for experiment in selected if experiment.name in include_set)
+    if exclude_names:
+        exclude_set = set(exclude_names)
+        selected = tuple(experiment for experiment in selected if experiment.name not in exclude_set)
+    if not selected:
+        raise ValueError("No experiments selected after include/exclude filtering.")
+    return selected
 
 
 def run_command(command: list[str], dry_run: bool) -> None:
@@ -271,7 +390,11 @@ def analyze_command(args: argparse.Namespace, model_dirs: list[Path], output_dir
 
 def main() -> None:
     args = parse_args()
-    experiments = selected_experiments(args.experiment_set)
+    experiments = filter_experiments(
+        selected_experiments(args.experiment_set),
+        args.include_experiment,
+        args.exclude_experiment,
+    )
     output_root = args.output_root / args.experiment_set
     if not args.dry_run:
         output_root.mkdir(parents=True, exist_ok=True)

@@ -35,7 +35,20 @@ from sklearn.utils.class_weight import compute_class_weight
 
 TARGET = "label_deep_soon"
 DEFAULT_THRESHOLD = 0.5
-MODEL_TYPES = ["gru", "lstm", "cnn", "cnn_gru", "tcn", "transformer"]
+MODEL_TYPES = [
+    "gru",
+    "lstm",
+    "bigru",
+    "bigru_attention",
+    "cnn",
+    "cnn_gru",
+    "tcn",
+    "tcn_attention",
+    "inception_time",
+    "transformer",
+    "transformer_tcn",
+    "patchtst_lite",
+]
 OUTPUT_COLUMNS = [
     "session_id",
     "candidate_time",
@@ -175,6 +188,85 @@ def build_model(
     from tensorflow import keras
     from tensorflow.keras import layers
 
+    def attention_pool(sequence, name: str):
+        weights = layers.Dense(1, name=f"{name}_score")(sequence)
+        weights = layers.Softmax(axis=1, name=f"{name}_weights")(weights)
+        weighted = layers.Multiply(name=f"{name}_weighted")([sequence, weights])
+        return layers.Lambda(lambda values: tf.reduce_sum(values, axis=1), name=f"{name}_pool")(weighted)
+
+    def tcn_stack(sequence, name_prefix: str):
+        output = layers.Conv1D(hidden_units, kernel_size=1, padding="same", name=f"{name_prefix}_projection")(sequence)
+        for block_index, dilation in enumerate(tcn_dilations):
+            residual = output
+            y = layers.Conv1D(
+                hidden_units,
+                kernel_size=conv_kernel_size,
+                padding="causal",
+                dilation_rate=dilation,
+                activation="relu",
+                name=f"{name_prefix}_block_{block_index}_conv_1",
+            )(output)
+            y = layers.Dropout(dropout, name=f"{name_prefix}_block_{block_index}_dropout_1")(y)
+            y = layers.Conv1D(
+                hidden_units,
+                kernel_size=conv_kernel_size,
+                padding="causal",
+                dilation_rate=dilation,
+                activation="relu",
+                name=f"{name_prefix}_block_{block_index}_conv_2",
+            )(y)
+            y = layers.Dropout(dropout, name=f"{name_prefix}_block_{block_index}_dropout_2")(y)
+            output = layers.Add(name=f"{name_prefix}_block_{block_index}_residual")([residual, y])
+            output = layers.Activation("relu", name=f"{name_prefix}_block_{block_index}_activation")(output)
+        return output
+
+    def transformer_stack(sequence, name_prefix: str):
+        if transformer_heads < 1:
+            raise ValueError("--transformer-heads must be at least 1")
+        if transformer_layers < 1:
+            raise ValueError("--transformer-layers must be at least 1")
+        key_dim = max(1, hidden_units // transformer_heads)
+        output = layers.Dense(hidden_units, name=f"{name_prefix}_projection")(sequence)
+        position_indices = np.arange(int(output.shape[1]), dtype=np.int32)[None, :]
+        position_embedding = layers.Embedding(
+            input_dim=int(output.shape[1]),
+            output_dim=hidden_units,
+            name=f"{name_prefix}_position_embedding",
+        )(position_indices)
+        output = layers.Add(name=f"{name_prefix}_position_add")([output, position_embedding])
+        for block_index in range(transformer_layers):
+            attention_input = layers.LayerNormalization(
+                epsilon=1e-6,
+                name=f"{name_prefix}_block_{block_index}_attention_norm",
+            )(output)
+            attention = layers.MultiHeadAttention(
+                num_heads=transformer_heads,
+                key_dim=key_dim,
+                dropout=dropout,
+                name=f"{name_prefix}_block_{block_index}_attention",
+            )(attention_input, attention_input)
+            attention = layers.Dropout(dropout, name=f"{name_prefix}_block_{block_index}_attention_dropout")(
+                attention
+            )
+            output = layers.Add(name=f"{name_prefix}_block_{block_index}_attention_residual")([output, attention])
+            feed_forward_input = layers.LayerNormalization(
+                epsilon=1e-6,
+                name=f"{name_prefix}_block_{block_index}_ff_norm",
+            )(output)
+            feed_forward = layers.Dense(
+                transformer_ff_dim,
+                activation="relu",
+                name=f"{name_prefix}_block_{block_index}_ff_expand",
+            )(feed_forward_input)
+            feed_forward = layers.Dropout(dropout, name=f"{name_prefix}_block_{block_index}_ff_dropout")(
+                feed_forward
+            )
+            feed_forward = layers.Dense(hidden_units, name=f"{name_prefix}_block_{block_index}_ff_project")(
+                feed_forward
+            )
+            output = layers.Add(name=f"{name_prefix}_block_{block_index}_ff_residual")([output, feed_forward])
+        return layers.LayerNormalization(epsilon=1e-6, name=f"{name_prefix}_output_norm")(output)
+
     stage_input = keras.Input(shape=(window_minutes,), dtype="int32", name="stage_sequence")
     context_input = keras.Input(shape=(context_dim,), dtype="float32", name="context")
     x = layers.Embedding(input_dim=stage_count, output_dim=embedding_dim, name="stage_embedding")(stage_input)
@@ -182,6 +274,17 @@ def build_model(
         x = layers.GRU(hidden_units, dropout=dropout, name="stage_gru")(x)
     elif model_type == "lstm":
         x = layers.LSTM(hidden_units, dropout=dropout, name="stage_lstm")(x)
+    elif model_type == "bigru":
+        x = layers.Bidirectional(
+            layers.GRU(hidden_units, dropout=dropout),
+            name="stage_bigru",
+        )(x)
+    elif model_type == "bigru_attention":
+        x = layers.Bidirectional(
+            layers.GRU(hidden_units, dropout=dropout, return_sequences=True),
+            name="stage_bigru",
+        )(x)
+        x = attention_pool(x, "bigru_attention")
     elif model_type == "cnn":
         x = layers.Conv1D(
             hidden_units,
@@ -202,77 +305,55 @@ def build_model(
         )(x)
         x = layers.GRU(hidden_units, dropout=dropout, name="stage_gru")(x)
     elif model_type == "tcn":
-        x = layers.Conv1D(hidden_units, kernel_size=1, padding="same", name="tcn_projection")(x)
-        for block_index, dilation in enumerate(tcn_dilations):
-            residual = x
-            y = layers.Conv1D(
-                hidden_units,
-                kernel_size=conv_kernel_size,
-                padding="causal",
-                dilation_rate=dilation,
-                activation="relu",
-                name=f"tcn_block_{block_index}_conv_1",
-            )(x)
-            y = layers.Dropout(dropout, name=f"tcn_block_{block_index}_dropout_1")(y)
-            y = layers.Conv1D(
-                hidden_units,
-                kernel_size=conv_kernel_size,
-                padding="causal",
-                dilation_rate=dilation,
-                activation="relu",
-                name=f"tcn_block_{block_index}_conv_2",
-            )(y)
-            y = layers.Dropout(dropout, name=f"tcn_block_{block_index}_dropout_2")(y)
-            x = layers.Add(name=f"tcn_block_{block_index}_residual")([residual, y])
-            x = layers.Activation("relu", name=f"tcn_block_{block_index}_activation")(x)
+        x = tcn_stack(x, "tcn")
         x = layers.GlobalAveragePooling1D(name="tcn_pool")(x)
-    else:
-        if transformer_heads < 1:
-            raise ValueError("--transformer-heads must be at least 1")
-        if transformer_layers < 1:
-            raise ValueError("--transformer-layers must be at least 1")
-        key_dim = max(1, hidden_units // transformer_heads)
-        x = layers.Dense(hidden_units, name="transformer_projection")(x)
-        position_indices = np.arange(window_minutes, dtype=np.int32)[None, :]
-        position_embedding = layers.Embedding(
-            input_dim=window_minutes,
-            output_dim=hidden_units,
-            name="position_embedding",
-        )(position_indices)
-        x = layers.Add(name="position_add")([x, position_embedding])
-        for block_index in range(transformer_layers):
-            attention_input = layers.LayerNormalization(
-                epsilon=1e-6,
-                name=f"transformer_block_{block_index}_attention_norm",
-            )(x)
-            attention = layers.MultiHeadAttention(
-                num_heads=transformer_heads,
-                key_dim=key_dim,
-                dropout=dropout,
-                name=f"transformer_block_{block_index}_attention",
-            )(attention_input, attention_input)
-            attention = layers.Dropout(dropout, name=f"transformer_block_{block_index}_attention_dropout")(
-                attention
-            )
-            x = layers.Add(name=f"transformer_block_{block_index}_attention_residual")([x, attention])
-            feed_forward_input = layers.LayerNormalization(
-                epsilon=1e-6,
-                name=f"transformer_block_{block_index}_ff_norm",
-            )(x)
-            feed_forward = layers.Dense(
-                transformer_ff_dim,
+    elif model_type == "tcn_attention":
+        x = tcn_stack(x, "tcn")
+        x = attention_pool(x, "tcn_attention")
+    elif model_type == "inception_time":
+        branch_filters = max(8, conv_filters)
+        branches = [
+            layers.Conv1D(
+                branch_filters,
+                kernel_size=kernel_size,
+                padding="same",
                 activation="relu",
-                name=f"transformer_block_{block_index}_ff_expand",
-            )(feed_forward_input)
-            feed_forward = layers.Dropout(dropout, name=f"transformer_block_{block_index}_ff_dropout")(
-                feed_forward
-            )
-            feed_forward = layers.Dense(hidden_units, name=f"transformer_block_{block_index}_ff_project")(
-                feed_forward
-            )
-            x = layers.Add(name=f"transformer_block_{block_index}_ff_residual")([x, feed_forward])
-        x = layers.LayerNormalization(epsilon=1e-6, name="transformer_output_norm")(x)
+                name=f"inception_conv_{kernel_size}",
+            )(x)
+            for kernel_size in (3, 5, 9)
+        ]
+        pooled = layers.MaxPooling1D(pool_size=3, strides=1, padding="same", name="inception_pool_source")(x)
+        pooled = layers.Conv1D(
+            branch_filters,
+            kernel_size=1,
+            padding="same",
+            activation="relu",
+            name="inception_pool_projection",
+        )(pooled)
+        x = layers.Concatenate(name="inception_concat")(branches + [pooled])
+        x = layers.Dropout(dropout, name="inception_dropout")(x)
+        x = layers.GlobalAveragePooling1D(name="inception_pool")(x)
+    elif model_type == "transformer":
+        x = transformer_stack(x, "transformer")
         x = layers.GlobalAveragePooling1D(name="transformer_pool")(x)
+    elif model_type == "transformer_tcn":
+        x = transformer_stack(x, "transformer")
+        x = tcn_stack(x, "post_transformer_tcn")
+        x = layers.GlobalAveragePooling1D(name="transformer_tcn_pool")(x)
+    elif model_type == "patchtst_lite":
+        x = layers.Dense(hidden_units, name="patch_projection_input")(x)
+        x = layers.Conv1D(
+            hidden_units,
+            kernel_size=min(10, window_minutes),
+            strides=5,
+            padding="same",
+            activation="relu",
+            name="patch_embedding",
+        )(x)
+        x = transformer_stack(x, "patch_transformer")
+        x = layers.GlobalAveragePooling1D(name="patch_transformer_pool")(x)
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
     context_branch = layers.Dense(context_units, activation="relu", name="context_dense")(context_input)
     merged = layers.Concatenate(name="merge")([x, context_branch])
     merged = layers.Dense(dense_units, activation="relu", name="dense")(merged)

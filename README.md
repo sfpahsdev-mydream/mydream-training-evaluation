@@ -478,8 +478,8 @@ The notebook starts from a JSONL export stored on Google Drive and creates:
 stages.csv / training_candidates_1min.csv / alarm_candidates_1min.csv
 sequence_60m/ / sequence_60m_alarm/
 sequence_experiments/gru/gru64_dense32_dropout00/
-sequence_experiments/large/
-sequence_experiments/repeated_evaluation_large/
+sequence_experiments/all/
+sequence_experiments/repeated_evaluation_all/
 ```
 
 It then recomputes the deployment-relevant `0.55` threshold, displays
@@ -488,10 +488,13 @@ configuration uses a fixed wake-time policy of weekday `07:00` and weekend
 `09:00`; update those values in the settings cell when testing another policy.
 By default `REUSE_EXISTING_RESULTS = False`, so models are retrained for the
 configured input and policy. Set it to `True` only when resuming the same run.
-The repeated evaluation section now defaults to the `large` experiment set in
-the notebook. It trains the GRU reference plus larger GRU, CNN+GRU, TCN, and
-Transformer candidates with five random seeds by default, so it runs 45
-sequence-model training jobs.
+The notebook now defaults to the `all` experiment set, but each model has an
+`EXPERIMENT_MODEL_FLAGS` boolean in the settings cell. By default the old small
+tuning candidates are registered but disabled, while larger GRU, CNN+GRU, TCN,
+Transformer, LSTM, BiGRU, attention, InceptionTime, Transformer+TCN, and
+PatchTST-lite candidates are enabled. The repeated evaluation section also
+trains the GRU reference, so the default enabled list runs 85 sequence-model
+training jobs across five seeds.
 When a tabular output is available, it can also evaluate identical
 deadline/coverage/tabular policies for each sequence candidate.
 
@@ -510,14 +513,18 @@ raw JSONL:    /content/drive/MyDrive/mydream_latest/input/mydream_sleep.jsonl
 profile root: /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy
 ```
 
-The notebook runs the following large-capacity command only after it has
-generated the sequence datasets and the selected GRU result:
+The notebook runs the following all-candidate command only after it has
+generated the sequence datasets and the selected GRU result. The notebook adds
+`--include-experiment` once per enabled `EXPERIMENT_MODEL_FLAGS` entry, so
+disabled models stay registered but do not train.
 
 ```bash
 cd /content/mydream-training-evaluation
 python run_sequence_experiment_matrix.py \
   --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy \
-  --experiment-set large \
+  --experiment-set all \
+  --include-experiment gru128_dense64_dropout10 \
+  --include-experiment gru256_dense128_dropout10 \
   --comparison-model-dir /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy/sequence_experiments/gru/gru64_dense32_dropout00
 ```
 
@@ -527,7 +534,7 @@ and `sequence_experiments` outputs under the supplied root. If no
 tabular prediction has been produced for the same dataset yet, add
 `--no-tabular-model` and compare sequence architectures first.
 
-The `large` set trains:
+The enabled default candidates are:
 
 ```text
 GRU(128) + Dense(64) + Dropout(0.1)
@@ -538,6 +545,14 @@ TCN(128) + Dense(128) + Dropout(0.1), dilations 1/2/4/8
 TCN(256) + Dense(128) + Dropout(0.1), dilations 1/2/4/8
 Transformer(128, 4 heads, 2 blocks) + Dense(128) + Dropout(0.1)
 Transformer(256, 8 heads, 2 blocks) + Dense(128) + Dropout(0.1)
+LSTM(128) + Dense(64) + Dropout(0.1)
+LSTM(256) + Dense(128) + Dropout(0.1)
+BiGRU(128) + Dense(128) + Dropout(0.1)
+BiGRU(128) + Attention + Dense(128) + Dropout(0.1)
+TCN(128) + Attention + Dense(128) + Dropout(0.1)
+InceptionTime-lite(64) + Dense(128) + Dropout(0.1)
+Transformer(128) + TCN(128) + Dense(128) + Dropout(0.1)
+PatchTST-lite(128) + Dense(128) + Dropout(0.1)
 ```
 
 Repeat the deployment-threshold comparison across random seeds:
@@ -545,7 +560,10 @@ Repeat the deployment-threshold comparison across random seeds:
 ```bash
 python run_repeated_sequence_evaluation.py \
   --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy \
-  --experiment-set large \
+  --experiment-set all \
+  --include-experiment gru64_dense32_dropout00 \
+  --include-experiment gru128_dense64_dropout10 \
+  --include-experiment gru256_dense128_dropout10 \
   --threshold 0.4 \
   --threshold 0.5 \
   --threshold 0.55 \
@@ -559,7 +577,7 @@ has been produced under the same profile root:
 ```bash
 python run_repeated_sequence_evaluation.py \
   --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy \
-  --experiment-set large \
+  --experiment-set all \
   --threshold 0.4 --threshold 0.5 --threshold 0.55 --threshold 0.6 \
   --seed 42 --seed 43 --seed 44 --seed 45 --seed 46 \
   --evaluate-policies
@@ -568,13 +586,13 @@ python run_repeated_sequence_evaluation.py \
 Repeated evaluation outputs:
 
 ```text
-sequence_experiments/repeated_evaluation_large/seed_<seed>/
-sequence_experiments/repeated_evaluation_large/per_seed_summary.csv
-sequence_experiments/repeated_evaluation_large/aggregate_summary.csv
-sequence_experiments/repeated_evaluation_large/delta_vs_gru_per_seed.csv
-sequence_experiments/repeated_evaluation_large/delta_vs_gru_summary.csv
-sequence_experiments/repeated_evaluation_large/policy_per_seed_summary.csv
-sequence_experiments/repeated_evaluation_large/policy_aggregate_summary.csv
+sequence_experiments/repeated_evaluation_all/seed_<seed>/
+sequence_experiments/repeated_evaluation_all/per_seed_summary.csv
+sequence_experiments/repeated_evaluation_all/aggregate_summary.csv
+sequence_experiments/repeated_evaluation_all/delta_vs_gru_per_seed.csv
+sequence_experiments/repeated_evaluation_all/delta_vs_gru_summary.csv
+sequence_experiments/repeated_evaluation_all/policy_per_seed_summary.csv
+sequence_experiments/repeated_evaluation_all/policy_aggregate_summary.csv
 ```
 
 Use `delta_vs_gru_summary.csv` to decide whether larger GRU, TCN,

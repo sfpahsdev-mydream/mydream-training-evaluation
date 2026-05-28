@@ -246,13 +246,14 @@ Important outputs:
 
 ## `run_sequence_experiment_matrix.py`
 
-Purpose: run predefined GRU, CNN+GRU, post-GRU expanded, or large-capacity
-architecture grids.
+Purpose: run predefined GRU, CNN+GRU, post-GRU expanded, large-capacity, or
+advanced architecture grids.
 
 `mydream_expanded_model_comparison_colab.ipynb` is the end-to-end Colab runner.
 It creates preprocessing output, `sequence_60m`, `sequence_60m_alarm`, and
 `sequence_experiments/gru/gru64_dense32_dropout00` before invoking the
-configured matrix. The notebook now defaults to the `large` matrix.
+configured matrix. The notebook now defaults to the `all` matrix and filters
+the actual run with model-level `EXPERIMENT_MODEL_FLAGS`.
 
 Main usage:
 
@@ -276,9 +277,17 @@ cd /content/mydream-training-evaluation
 python run_sequence_experiment_matrix.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --experiment-set large --comparison-model-dir /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy/sequence_experiments/gru/gru64_dense32_dropout00
 ```
 
+Run the full registered set but train only selected models:
+
+```bash
+cd /content/mydream-training-evaluation
+python run_sequence_experiment_matrix.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --experiment-set all --include-experiment gru256_dense128_dropout10 --include-experiment bigru_attention128_dense128_dropout10 --comparison-model-dir /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy/sequence_experiments/gru/gru64_dense32_dropout00
+```
+
 Key functions:
 
-- `selected_experiments`: select GRU, CNN+GRU, expanded, large, or all experiment definitions.
+- `selected_experiments`: select GRU, CNN+GRU, expanded, large, advanced, or all experiment definitions.
+- `filter_experiments`: apply `--include-experiment` and `--exclude-experiment` model-level filters.
 - `parse_args`: resolve `--profile-root` into the standard profile dataset and output folders.
 - `train_command`: build the `train_sequence_colab.py` command.
 - `analyze_command`: build the comparison command after predictions exist.
@@ -286,24 +295,25 @@ Key functions:
 
 ## `run_repeated_sequence_evaluation.py`
 
-Purpose: repeat packaged or large-capacity sequence-model training across
-random seeds and thresholds, aggregate comparison against the GRU reference,
-and optionally compare the same candidate-level policies for each model.
+Purpose: repeat packaged, large-capacity, advanced, or all sequence-model
+training across random seeds and thresholds, aggregate comparison against the
+GRU reference, and optionally compare the same candidate-level policies for
+each model.
 
 Main usage:
 
 ```bash
-python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --experiment-set large --threshold 0.4 --threshold 0.5 --threshold 0.55 --threshold 0.6 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46 --evaluate-policies
+python run_repeated_sequence_evaluation.py --profile-root /content/drive/MyDrive/mydream_latest/out/latest_fixed_wake_policy --experiment-set all --include-experiment gru64_dense32_dropout00 --include-experiment gru256_dense128_dropout10 --include-experiment bigru_attention128_dense128_dropout10 --threshold 0.4 --threshold 0.5 --threshold 0.55 --threshold 0.6 --seed 42 --seed 43 --seed 44 --seed 45 --seed 46 --evaluate-policies
 ```
 
 Important outputs:
 
-- `sequence_experiments/repeated_evaluation_large/per_seed_summary.csv`
-- `sequence_experiments/repeated_evaluation_large/aggregate_summary.csv`
-- `sequence_experiments/repeated_evaluation_large/delta_vs_gru_per_seed.csv`
-- `sequence_experiments/repeated_evaluation_large/delta_vs_gru_summary.csv`
-- `sequence_experiments/repeated_evaluation_large/policy_per_seed_summary.csv`
-- `sequence_experiments/repeated_evaluation_large/policy_aggregate_summary.csv`
+- `sequence_experiments/repeated_evaluation_all/per_seed_summary.csv`
+- `sequence_experiments/repeated_evaluation_all/aggregate_summary.csv`
+- `sequence_experiments/repeated_evaluation_all/delta_vs_gru_per_seed.csv`
+- `sequence_experiments/repeated_evaluation_all/delta_vs_gru_summary.csv`
+- `sequence_experiments/repeated_evaluation_all/policy_per_seed_summary.csv`
+- `sequence_experiments/repeated_evaluation_all/policy_aggregate_summary.csv`
 
 ## `convert_sequence_model_tflite.py`
 
