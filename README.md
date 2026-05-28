@@ -504,6 +504,17 @@ Open directly in Colab:
 https://colab.research.google.com/github/sfpahsdev-mydream/mydream-training-evaluation/blob/main/mydream_expanded_model_comparison_colab.ipynb
 ```
 
+The notebook can also run in local Jupyter. Set this in the first settings cell:
+
+```python
+RUN_ENV = "local"
+```
+
+Local mode uses the current working directory as `CODE_ROOT`, reads
+`mydream_sleep_2026-05-18.jsonl` from that folder by default, and writes outputs
+under `out/latest_fixed_wake_policy/`. TensorFlow automatically uses a GPU when
+available; if no GPU is detected, the notebook continues on CPU.
+
 Keep code in the runtime and persist input and generated results on Google
 Drive:
 
