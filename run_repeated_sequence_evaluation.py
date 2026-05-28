@@ -22,10 +22,16 @@ class Experiment:
     hidden_units: int
     dense_units: int
     dropout: float
+    context_units: int = 16
     conv_filters: int = 16
+    conv_kernel_size: int = 5
+    tcn_dilations: str = "1,2,4,8"
+    transformer_heads: int = 4
+    transformer_layers: int = 2
+    transformer_ff_dim: int = 128
 
 
-EXPERIMENTS = (
+PACKAGED_EXPERIMENTS = (
     Experiment("gru64_dense32_dropout00", "gru", hidden_units=64, dense_units=32, dropout=0.0),
     Experiment("tcn64_dense32_dropout00", "tcn", hidden_units=64, dense_units=32, dropout=0.0),
     Experiment("transformer64_dense32_dropout10", "transformer", hidden_units=64, dense_units=32, dropout=0.1),
@@ -36,6 +42,82 @@ EXPERIMENTS = (
         dense_units=32,
         dropout=0.0,
         conv_filters=32,
+    ),
+)
+LARGE_CAPACITY_EXPERIMENTS = (
+    Experiment(
+        "gru128_dense64_dropout10",
+        "gru",
+        hidden_units=128,
+        dense_units=64,
+        dropout=0.1,
+        context_units=32,
+    ),
+    Experiment(
+        "gru256_dense128_dropout10",
+        "gru",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+    ),
+    Experiment(
+        "cnn64_gru128_dense128_dropout10",
+        "cnn_gru",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=64,
+    ),
+    Experiment(
+        "cnn64_gru256_dense128_dropout10",
+        "cnn_gru",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=64,
+    ),
+    Experiment(
+        "tcn128_dense128_dropout10",
+        "tcn",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=128,
+    ),
+    Experiment(
+        "tcn256_dense128_dropout10",
+        "tcn",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=256,
+    ),
+    Experiment(
+        "transformer128_dense128_dropout10",
+        "transformer",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        transformer_heads=4,
+        transformer_layers=2,
+        transformer_ff_dim=256,
+    ),
+    Experiment(
+        "transformer256_2layer_dense128_dropout10",
+        "transformer",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        transformer_heads=8,
+        transformer_layers=2,
+        transformer_ff_dim=512,
     ),
 )
 METRICS = ("deep_success", "strong_fail", "success_per_smart", "sleep_quality_success", "smart_alarm")
@@ -57,6 +139,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--seed", type=int, action="append", dest="seeds")
     parser.add_argument("--threshold", type=float, action="append", dest="thresholds")
+    parser.add_argument(
+        "--experiment-set",
+        choices=["packaged", "large", "all"],
+        default="packaged",
+        help="Candidate set to repeat. Defaults to the already packaged Android candidates.",
+    )
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument(
@@ -74,11 +162,24 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     args.seeds = args.seeds or list(DEFAULT_SEEDS)
     args.thresholds = args.thresholds or [0.55]
-    args.output_root = args.output_root or args.profile_root / "sequence_experiments" / "repeated_evaluation"
+    default_output_name = (
+        "repeated_evaluation"
+        if args.experiment_set == "packaged"
+        else f"repeated_evaluation_{args.experiment_set}"
+    )
+    args.output_root = args.output_root or args.profile_root / "sequence_experiments" / default_output_name
     args.tabular_predictions = (
         args.tabular_predictions or args.profile_root / "model_tabular_tflite" / "alarm_predictions_long.csv"
     )
     return args
+
+
+def selected_experiments(name: str) -> tuple[Experiment, ...]:
+    if name == "packaged":
+        return PACKAGED_EXPERIMENTS
+    if name == "large":
+        return (PACKAGED_EXPERIMENTS[0],) + LARGE_CAPACITY_EXPERIMENTS
+    return PACKAGED_EXPERIMENTS + LARGE_CAPACITY_EXPERIMENTS
 
 
 def run(command: list[str], dry_run: bool) -> None:
@@ -109,10 +210,22 @@ def train_command(
         str(experiment.hidden_units),
         "--dense-units",
         str(experiment.dense_units),
+        "--context-units",
+        str(experiment.context_units),
         "--dropout",
         str(experiment.dropout),
         "--conv-filters",
         str(experiment.conv_filters),
+        "--conv-kernel-size",
+        str(experiment.conv_kernel_size),
+        "--tcn-dilations",
+        experiment.tcn_dilations,
+        "--transformer-heads",
+        str(experiment.transformer_heads),
+        "--transformer-layers",
+        str(experiment.transformer_layers),
+        "--transformer-ff-dim",
+        str(experiment.transformer_ff_dim),
         "--epochs",
         str(args.epochs),
         "--batch-size",
@@ -255,10 +368,11 @@ def main() -> None:
 
     summary_frames: list[pd.DataFrame] = []
     policy_frames: list[pd.DataFrame] = []
+    experiments = selected_experiments(args.experiment_set)
     for seed in args.seeds:
         seed_root = args.output_root / f"seed_{seed}"
         model_dirs: list[Path] = []
-        for experiment in EXPERIMENTS:
+        for experiment in experiments:
             model_dir = seed_root / experiment.name
             model_dirs.append(model_dir)
             predictions_path = model_dir / "alarm_predictions_long.csv"

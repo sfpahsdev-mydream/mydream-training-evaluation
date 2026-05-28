@@ -28,8 +28,13 @@ class Experiment:
     hidden_units: int
     dense_units: int
     dropout: float
+    context_units: int = 16
     conv_filters: int = 16
     conv_kernel_size: int = 5
+    tcn_dilations: str = "1,2,4,8"
+    transformer_heads: int = 4
+    transformer_layers: int = 2
+    transformer_ff_dim: int = 128
 
 
 GRU_TUNING_EXPERIMENTS = (
@@ -60,6 +65,83 @@ EXPANDED_ARCHITECTURE_EXPERIMENTS = (
     ),
 )
 
+LARGE_CAPACITY_EXPERIMENTS = (
+    Experiment(
+        "gru128_dense64_dropout10",
+        "gru",
+        hidden_units=128,
+        dense_units=64,
+        dropout=0.1,
+        context_units=32,
+    ),
+    Experiment(
+        "gru256_dense128_dropout10",
+        "gru",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+    ),
+    Experiment(
+        "cnn64_gru128_dense128_dropout10",
+        "cnn_gru",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=64,
+    ),
+    Experiment(
+        "cnn64_gru256_dense128_dropout10",
+        "cnn_gru",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=64,
+    ),
+    Experiment(
+        "tcn128_dense128_dropout10",
+        "tcn",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=128,
+    ),
+    Experiment(
+        "tcn256_dense128_dropout10",
+        "tcn",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        conv_filters=256,
+    ),
+    Experiment(
+        "transformer128_dense128_dropout10",
+        "transformer",
+        hidden_units=128,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        transformer_heads=4,
+        transformer_layers=2,
+        transformer_ff_dim=256,
+    ),
+    Experiment(
+        "transformer256_2layer_dense128_dropout10",
+        "transformer",
+        hidden_units=256,
+        dense_units=128,
+        dropout=0.1,
+        context_units=64,
+        transformer_heads=8,
+        transformer_layers=2,
+        transformer_ff_dim=512,
+    ),
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MyDream sequence experiment matrix.")
@@ -75,7 +157,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--predict-sequence-dir", type=Path, default=DEFAULT_ALARM_SEQUENCE_DIR)
     parser.add_argument("--tabular-model-dir", type=Path, default=DEFAULT_TABULAR_MODEL_DIR)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--experiment-set", choices=["gru", "cnn_gru", "expanded", "all"], default="gru")
+    parser.add_argument("--experiment-set", choices=["gru", "cnn_gru", "expanded", "large", "all"], default="gru")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--random-state", type=int, default=42)
@@ -117,7 +199,14 @@ def selected_experiments(name: str) -> tuple[Experiment, ...]:
         return CNN_GRU_EXPERIMENTS
     if name == "expanded":
         return EXPANDED_ARCHITECTURE_EXPERIMENTS
-    return GRU_TUNING_EXPERIMENTS + CNN_GRU_EXPERIMENTS + EXPANDED_ARCHITECTURE_EXPERIMENTS
+    if name == "large":
+        return LARGE_CAPACITY_EXPERIMENTS
+    return (
+        GRU_TUNING_EXPERIMENTS
+        + CNN_GRU_EXPERIMENTS
+        + EXPANDED_ARCHITECTURE_EXPERIMENTS
+        + LARGE_CAPACITY_EXPERIMENTS
+    )
 
 
 def run_command(command: list[str], dry_run: bool) -> None:
@@ -143,12 +232,22 @@ def train_command(args: argparse.Namespace, experiment: Experiment, output_dir: 
         str(experiment.hidden_units),
         "--dense-units",
         str(experiment.dense_units),
+        "--context-units",
+        str(experiment.context_units),
         "--dropout",
         str(experiment.dropout),
         "--conv-filters",
         str(experiment.conv_filters),
         "--conv-kernel-size",
         str(experiment.conv_kernel_size),
+        "--tcn-dilations",
+        experiment.tcn_dilations,
+        "--transformer-heads",
+        str(experiment.transformer_heads),
+        "--transformer-layers",
+        str(experiment.transformer_layers),
+        "--transformer-ff-dim",
+        str(experiment.transformer_ff_dim),
         "--epochs",
         str(args.epochs),
         "--batch-size",

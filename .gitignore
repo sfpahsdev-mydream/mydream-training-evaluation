@@ -12,6 +12,7 @@ env/
 
 # Generated outputs
 out/
+android_assets/
 colab_result/
 local_backup/
 repeated_evaluation/
