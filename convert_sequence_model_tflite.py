@@ -46,6 +46,14 @@ def load_context_scaler(model_dir: Path) -> dict[str, Any]:
         return json.load(handle)
 
 
+def load_sequence_metrics(model_dir: Path) -> dict[str, Any]:
+    path = model_dir / "sequence_metrics.json"
+    if not path.exists():
+        raise FileNotFoundError(f"Missing sequence metrics: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def load_sample(sequence_dir: Path, scaler: dict[str, Any], sample_rows: int) -> tuple[np.ndarray, np.ndarray]:
     metadata = pd.read_csv(sequence_dir / "sequence_metadata.csv")
     stages = np.load(sequence_dir / "sequence_stage_ids.npy").astype(np.int32)
@@ -91,15 +99,23 @@ def layer_by_name(model: Any, name: str) -> Any:
         raise ValueError(f"Saved model is missing expected layer {name!r}") from error
 
 
-def rebuild_unrolled_gru_model(tf: Any, saved_model: Any, context_dim: int) -> Any:
-    """Rebuild the selected GRU architecture with static unrolled recurrence.
+def rebuild_tflite_friendly_model(tf: Any, saved_model: Any, context_dim: int, model_type: str) -> Any:
+    """Rebuild recurrent architectures with static unrolled recurrence.
 
-    Colab GPU-trained GRU models can save as CudnnRNN/TensorList graphs that are
-    awkward for TFLite. Rebuilding the same Keras layers with ``unroll=True``
-    keeps the learned weights while producing a simpler conversion graph.
+    Colab GPU-trained GRU layers can save as CudnnRNN/TensorList graphs that
+    are awkward for TFLite. Rebuilding the same Keras layers with
+    ``unroll=True`` keeps the learned weights while producing a simpler
+    conversion graph. Non-recurrent architectures should use
+    ``--no-rebuild-unrolled-gru``.
     """
     keras = tf.keras
     layers = keras.layers
+
+    if model_type not in {"gru", "cnn_gru"}:
+        raise ValueError(
+            f"Model type {model_type!r} is not supported by recurrent rebuild. "
+            "Use --no-rebuild-unrolled-gru for non-recurrent architectures.",
+        )
 
     embedding_layer = layer_by_name(saved_model, "stage_embedding")
     gru_layer = layer_by_name(saved_model, "stage_gru")
@@ -114,6 +130,15 @@ def rebuild_unrolled_gru_model(tf: Any, saved_model: Any, context_dim: int) -> A
         output_dim=embedding_layer.output_dim,
         name="stage_embedding",
     )(stage_input)
+    if model_type == "cnn_gru":
+        conv_layer = layer_by_name(saved_model, "stage_conv")
+        x = layers.Conv1D(
+            conv_layer.filters,
+            kernel_size=conv_layer.kernel_size[0],
+            padding=conv_layer.padding,
+            activation=conv_layer.activation,
+            name="stage_conv",
+        )(x)
     x = layers.GRU(
         gru_layer.units,
         dropout=0.0,
@@ -128,7 +153,10 @@ def rebuild_unrolled_gru_model(tf: Any, saved_model: Any, context_dim: int) -> A
     output = layers.Dense(output_layer.units, activation="sigmoid", name="p_next_deep_10m")(merged)
     rebuilt = keras.Model(inputs=[stage_input, context_input], outputs=output)
 
-    for name in ("stage_embedding", "stage_gru", "context_dense", "dense", "p_next_deep_10m"):
+    layer_names = ["stage_embedding", "stage_gru", "context_dense", "dense", "p_next_deep_10m"]
+    if model_type == "cnn_gru":
+        layer_names.insert(1, "stage_conv")
+    for name in layer_names:
         rebuilt.get_layer(name).set_weights(saved_model.get_layer(name).get_weights())
     return rebuilt
 
@@ -185,10 +213,12 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     saved_model = tf.keras.models.load_model(model_path)
     scaler = load_context_scaler(args.model_dir)
+    metrics = load_sequence_metrics(args.model_dir)
+    model_type = metrics.get("architecture", {}).get("model_type", "gru")
     model = (
         saved_model
         if args.no_rebuild_unrolled_gru
-        else rebuild_unrolled_gru_model(tf, saved_model, context_dim=len(scaler["columns"]))
+        else rebuild_tflite_friendly_model(tf, saved_model, context_dim=len(scaler["columns"]), model_type=model_type)
     )
 
     float32_path = args.output_dir / "sequence_model_float32.tflite"
@@ -199,7 +229,8 @@ def main() -> None:
         "float32_tflite": str(float32_path),
         "float32_size_bytes": float32_path.stat().st_size,
         "context_columns": scaler["columns"],
-        "conversion_model": "saved_model_direct" if args.no_rebuild_unrolled_gru else "rebuilt_unrolled_gru",
+        "model_type": model_type,
+        "conversion_model": "saved_model_direct" if args.no_rebuild_unrolled_gru else "rebuilt_tflite_friendly",
     }
 
     if args.float16:
